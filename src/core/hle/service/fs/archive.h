@@ -259,6 +259,39 @@ public:
     Result DeleteExtSaveData(MediaType media_type, u8 unknown, u32 high, u32 low);
 
     /**
+     * Enumerates ExtSaveData IDs for the specified media type
+     * @param media_type The media type to enumerate (NAND / SDMC)
+     * @param shared Whether to enumerate shared (NAND) ext save data
+     * @param entry_size Size of each ID entry in bytes (4 or 8)
+     * @param output Output buffer to write IDs into
+     * @param max_count Maximum number of IDs to write
+     * @return Number of IDs written on success, or error code
+     */
+    ResultVal<u32> EnumerateExtSaveData(MediaType media_type, bool shared, u32 entry_size,
+                                        u8* output, u32 max_count);
+
+    /**
+     * Reads the SMDH icon from the specified ExtSaveData archive
+     * @param info ExtSaveData archive identifier
+     * @param buffer_size Maximum bytes to read into buffer
+     * @param buffer Output buffer for icon data
+     * @return Number of bytes read on success, or error code
+     */
+    ResultVal<u32> ReadExtSaveDataIcon(const ExtSaveDataInfo& info, u32 buffer_size, u8* buffer);
+
+    /**
+     * Returns block usage information for the specified ExtSaveData archive
+     * @param info ExtSaveData archive identifier
+     * @return Block info on success, or error code
+     */
+    struct ExtDataBlockInfo {
+        u64 total_blocks;
+        u64 free_blocks;
+        u32 block_size;
+    };
+    ResultVal<ExtDataBlockInfo> GetExtDataBlockSize(const ExtSaveDataInfo& info);
+
+    /**
      * Deletes the SystemSaveData archive folder for the specified save data id
      * @param high The high word of the SystemSaveData archive to delete
      * @param low The low word of the SystemSaveData archive to delete

@@ -429,6 +429,73 @@ private:
     void DeleteExtSaveData(Kernel::HLERequestContext& ctx);
 
     /**
+     * FS_User::EnumerateExtSaveData service function (0x08550102)
+     *  Inputs:
+     *      1 : Output IDs buffer size in bytes
+     *      2 : Media type (NAND / SDMC)
+     *      3 : ID entry size (4 or 8)
+     *      4 : Shared flag (0 = normal, 1 = shared)
+     *      5 : (IDs buffer size << 4) | 0xC
+     *      6 : Pointer to output IDs buffer
+     *  Outputs:
+     *      1 : Result of function, 0 on success, otherwise error code
+     *      2 : Number of IDs written
+     */
+    void EnumerateExtSaveData(Kernel::HLERequestContext& ctx);
+
+    /**
+     * FS_User::Obsoleted_3_0_EnumerateExtSaveData service function (0x08330082)
+     *  Inputs:
+     *      1 : Output IDs buffer size in bytes
+     *      2 : Media type (NAND / SDMC)
+     *      3 : (IDs buffer size << 4) | 0xC
+     *      4 : Pointer to output IDs buffer
+     *  Outputs:
+     *      1 : Result of function, 0 on success, otherwise error code
+     *      2 : Number of IDs written
+     */
+    void ObsoletedEnumerateExtSaveData(Kernel::HLERequestContext& ctx);
+
+    /**
+     * FS_User::ReadExtSaveDataIcon service function (0x08530142)
+     *  Inputs:
+     *      1-4 : ExtSaveDataInfo
+     *      5 : SMDH buffer size
+     *      6 : (SMDH size << 4) | 0xC
+     *      7 : Pointer to output SMDH buffer
+     *  Outputs:
+     *      1 : Result of function, 0 on success, otherwise error code
+     *      2 : Bytes read
+     */
+    void ReadExtSaveDataIcon(Kernel::HLERequestContext& ctx);
+
+    /**
+     * FS_User::GetExtDataBlockSize service function (0x08540100)
+     *  Inputs:
+     *      1-4 : ExtSaveDataInfo
+     *  Outputs:
+     *      1 : Result of function, 0 on success, otherwise error code
+     *      2-3 : Total blocks (u64)
+     *      4-5 : Free blocks (u64)
+     *      6 : Block size (u32)
+     */
+    void GetExtDataBlockSize(Kernel::HLERequestContext& ctx);
+
+    /**
+     * FS_User::CheckArchive service function (0x087000C2)
+     * Checks whether the specified archive exists and is accessible.
+     *  Inputs:
+     *      1 : Archive ID code
+     *      2 : Archive path type (LowPathType)
+     *      3 : Archive path size
+     *      4 : Static buffer descriptor
+     *      5 : Archive path pointer
+     *  Outputs:
+     *      1 : Result of function, 0 on success, otherwise error code
+     */
+    void CheckArchive(Kernel::HLERequestContext& ctx);
+
+    /**
      * FS_User::CardSlotIsInserted service function.
      *  Inputs:
      *      0 : 0x08210000

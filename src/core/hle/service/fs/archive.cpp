@@ -290,6 +290,117 @@ Result ArchiveManager::DeleteExtSaveData(MediaType media_type, u8 unknown, u32 h
     return ext_savedata->DeleteExtData(media_type, unknown, high, low);
 }
 
+ResultVal<u32> ArchiveManager::EnumerateExtSaveData(MediaType media_type, bool shared,
+                                                    u32 entry_size, u8* output, u32 max_count) {
+    std::string media_dir;
+    bool use_shared = shared || (media_type == MediaType::NAND);
+    if (media_type == MediaType::SDMC || media_type == MediaType::NAND) {
+        media_dir = media_type == MediaType::NAND
+                        ? FileUtil::GetUserPath(FileUtil::UserPath::NANDDir)
+                        : FileUtil::GetUserPath(FileUtil::UserPath::SDMCDir);
+    } else {
+        return ResultUnknown;
+    }
+
+    auto parse_hex = [](const std::string& s, u32& out) -> bool {
+        char* end = nullptr;
+        unsigned long val = std::strtoul(s.c_str(), &end, 16);
+        if (end == s.c_str() || *end != '\0')
+            return false;
+        out = static_cast<u32>(val);
+        return true;
+    };
+
+    std::string container = FileSys::GetExtDataContainerPath(media_dir, use_shared);
+    u32 written = 0;
+
+    FileUtil::ForeachDirectoryEntry(
+        nullptr, container,
+        [&](u64*, const std::string& dir, const std::string& high_name) {
+            if (written >= max_count)
+                return true;
+            u32 high;
+            if (!parse_hex(high_name, high))
+                return true;
+
+            FileUtil::ForeachDirectoryEntry(
+                nullptr, dir + high_name + "/",
+                [&](u64*, const std::string&, const std::string& low_name) {
+                    if (written >= max_count)
+                        return true;
+                    u32 low;
+                    if (!parse_hex(low_name, low))
+                        return true;
+
+                    if (entry_size == sizeof(u64)) {
+                        u64 id = (static_cast<u64>(high) << 32) | low;
+                        std::memcpy(output + written * sizeof(u64), &id, sizeof(u64));
+                    } else if (entry_size == sizeof(u32)) {
+                        std::memcpy(output + written * sizeof(u32), &low, sizeof(u32));
+                    }
+                    ++written;
+                    return true;
+                });
+
+            return true;
+        });
+
+    return written;
+}
+
+ResultVal<u32> ArchiveManager::ReadExtSaveDataIcon(const ExtSaveDataInfo& info, u32 buffer_size,
+                                                   u8* buffer) {
+    auto archive = id_code_map.find(
+        static_cast<MediaType>(info.media_type) == MediaType::NAND
+            ? ArchiveIdCode::SharedExtSaveData
+            : ArchiveIdCode::ExtSaveData);
+    if (archive == id_code_map.end()) {
+        return UnimplementedFunction(ErrorModule::FS);
+    }
+
+    auto* ext_savedata =
+        static_cast<FileSys::ArchiveFactory_ExtSaveData*>(archive->second.get());
+    FileSys::Path path = FileSys::ConstructExtDataBinaryPath(
+        static_cast<u32>(info.media_type), info.save_id_high, info.save_id_low);
+    std::string icon_path =
+        FileSys::GetExtSaveDataPath(ext_savedata->GetMountPoint(), path) + "icon";
+
+    FileUtil::IOFile file(icon_path, "rb");
+    if (!file.IsOpen()) {
+        return FileSys::ResultFileNotFound;
+    }
+
+    u32 bytes_to_read =
+        static_cast<u32>(std::min(static_cast<u64>(buffer_size), file.GetSize()));
+    if (file.ReadBytes(buffer, bytes_to_read) != bytes_to_read) {
+        return ResultUnknown;
+    }
+    return bytes_to_read;
+}
+
+ResultVal<ArchiveManager::ExtDataBlockInfo> ArchiveManager::GetExtDataBlockSize(
+    const ExtSaveDataInfo& info) {
+    auto archive = id_code_map.find(
+        static_cast<MediaType>(info.media_type) == MediaType::NAND
+            ? ArchiveIdCode::SharedExtSaveData
+            : ArchiveIdCode::ExtSaveData);
+    if (archive == id_code_map.end()) {
+        return UnimplementedFunction(ErrorModule::FS);
+    }
+
+    auto* ext_savedata =
+        static_cast<FileSys::ArchiveFactory_ExtSaveData*>(archive->second.get());
+    FileSys::Path path = FileSys::ConstructExtDataBinaryPath(
+        static_cast<u32>(info.media_type), info.save_id_high, info.save_id_low);
+
+    CASCADE_RESULT(FileSys::ArchiveFormatInfo format_info, ext_savedata->GetFormatInfo(path, 0));
+
+    constexpr u32 block_size = 512;
+    u64 total_blocks =
+        (static_cast<u64>(format_info.total_size) + block_size - 1) / block_size;
+    return ExtDataBlockInfo{total_blocks, total_blocks, block_size};
+}
+
 Result ArchiveManager::DeleteSystemSaveData(u32 high, u32 low) {
     // Construct the binary path to the archive first
     const FileSys::Path path = FileSys::ConstructSystemSaveDataBinaryPath(high, low);

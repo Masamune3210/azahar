@@ -1016,6 +1016,138 @@ void FS_USER::DeleteExtSaveData(Kernel::HLERequestContext& ctx) {
               info.save_id_low, info.save_id_high, info.media_type, info.unknown);
 }
 
+void FS_USER::EnumerateExtSaveData(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    u32 ids_size = rp.Pop<u32>();
+    u8 media_type = rp.Pop<u8>();
+    u32 id_size = rp.Pop<u32>();
+    bool shared = rp.Pop<bool>();
+    auto& output_buffer = rp.PopMappedBuffer();
+
+    u32 max_count = id_size > 0 ? ids_size / id_size : 0;
+    std::vector<u8> output(ids_size);
+    auto result = archives.EnumerateExtSaveData(static_cast<MediaType>(media_type), shared,
+                                                id_size, output.data(), max_count);
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 2);
+    if (result.Failed()) {
+        rb.Push(result.Code());
+        rb.Push<u32>(0);
+    } else {
+        u32 count = result.Unwrap();
+        output_buffer.Write(output.data(), 0, count * id_size);
+        rb.Push(ResultSuccess);
+        rb.Push(count);
+    }
+    rb.PushMappedBuffer(output_buffer);
+
+    LOG_DEBUG(Service_FS, "called, media_type={:02X} shared={} id_size={} ids_size={:08X}",
+              media_type, shared, id_size, ids_size);
+}
+
+void FS_USER::ObsoletedEnumerateExtSaveData(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    u32 ids_size = rp.Pop<u32>();
+    u8 media_type = rp.Pop<u8>();
+    auto& output_buffer = rp.PopMappedBuffer();
+
+    constexpr u32 id_size = sizeof(u64);
+    u32 max_count = ids_size / id_size;
+    std::vector<u8> output(ids_size);
+    auto result = archives.EnumerateExtSaveData(static_cast<MediaType>(media_type), false,
+                                                id_size, output.data(), max_count);
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 2);
+    if (result.Failed()) {
+        rb.Push(result.Code());
+        rb.Push<u32>(0);
+    } else {
+        u32 count = result.Unwrap();
+        output_buffer.Write(output.data(), 0, count * id_size);
+        rb.Push(ResultSuccess);
+        rb.Push(count);
+    }
+    rb.PushMappedBuffer(output_buffer);
+
+    LOG_DEBUG(Service_FS, "called, media_type={:02X} ids_size={:08X}", media_type, ids_size);
+}
+
+void FS_USER::ReadExtSaveDataIcon(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    ExtSaveDataInfo info = rp.PopRaw<ExtSaveDataInfo>();
+    u32 smdh_size = rp.Pop<u32>();
+    auto& output_buffer = rp.PopMappedBuffer();
+
+    std::vector<u8> icon_data(smdh_size);
+    auto result = archives.ReadExtSaveDataIcon(info, smdh_size, icon_data.data());
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 2);
+    if (result.Failed()) {
+        rb.Push(result.Code());
+        rb.Push<u32>(0);
+    } else {
+        output_buffer.Write(icon_data.data(), 0, *result);
+        rb.Push(ResultSuccess);
+        rb.Push(*result);
+    }
+    rb.PushMappedBuffer(output_buffer);
+
+    LOG_DEBUG(Service_FS, "called, save_low={:08X} save_high={:08X} smdh_size={:08X}",
+              info.save_id_low, info.save_id_high, smdh_size);
+}
+
+void FS_USER::GetExtDataBlockSize(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    ExtSaveDataInfo info = rp.PopRaw<ExtSaveDataInfo>();
+
+    auto result = archives.GetExtDataBlockSize(info);
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(6, 0);
+    if (result.Failed()) {
+        rb.Push(result.Code());
+        rb.Push<u32>(0);
+        rb.Push<u32>(0);
+        rb.Push<u32>(0);
+        rb.Push<u32>(0);
+        rb.Push<u32>(0);
+    } else {
+        rb.Push(ResultSuccess);
+        rb.Push(static_cast<u32>(result->total_blocks & 0xFFFFFFFF));
+        rb.Push(static_cast<u32>(result->total_blocks >> 32));
+        rb.Push(static_cast<u32>(result->free_blocks & 0xFFFFFFFF));
+        rb.Push(static_cast<u32>(result->free_blocks >> 32));
+        rb.Push(result->block_size);
+    }
+
+    LOG_DEBUG(Service_FS, "called, save_low={:08X} save_high={:08X}", info.save_id_low,
+              info.save_id_high);
+}
+
+void FS_USER::CheckArchive(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const auto archive_id = rp.PopEnum<FS::ArchiveIdCode>();
+    const auto archivename_type = rp.PopEnum<FileSys::LowPathType>();
+    const auto archivename_size = rp.Pop<u32>();
+    std::vector<u8> archivename = rp.PopStaticBuffer();
+    ASSERT(archivename.size() == archivename_size);
+    const FileSys::Path archive_path(archivename_type, std::move(archivename));
+
+    ClientSlot* slot = GetSessionData(ctx.Session());
+    const ResultVal<ArchiveHandle> handle =
+        archives.OpenArchive(archive_id, archive_path, slot->program_id);
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    if (handle.Succeeded()) {
+        archives.CloseArchive(*handle);
+        rb.Push(ResultSuccess);
+    } else {
+        rb.Push(handle.Code());
+    }
+
+    LOG_DEBUG(Service_FS, "called, archive_id=0x{:08X} archive_path={}", archive_id,
+              archive_path.DebugStr());
+}
+
 void FS_USER::CardSlotIsInserted(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
@@ -1844,7 +1976,7 @@ FS_USER::FS_USER(Core::System& system)
         {0x0830, &FS_USER::ObsoletedCreateExtSaveData, "Obsoleted_3_0_CreateExtSaveData"},
         {0x0831, nullptr, "CreateSharedExtSaveData"},
         {0x0832, nullptr, "ReadExtSaveDataIcon"},
-        {0x0833, nullptr, "EnumerateExtSaveData"},
+        {0x0833, &FS_USER::ObsoletedEnumerateExtSaveData, "Obsoleted_3_0_EnumerateExtSaveData"},
         {0x0834, nullptr, "EnumerateSharedExtSaveData"},
         {0x0835, &FS_USER::ObsoletedDeleteExtSaveData, "Obsoleted_3_0_DeleteExtSaveData"},
         {0x0836, nullptr, "DeleteSharedExtSaveData"},
@@ -1876,9 +2008,9 @@ FS_USER::FS_USER(Core::System& system)
         {0x0850, nullptr, "GetSpecialFileSize"},
         {0x0851, &FS_USER::CreateExtSaveData, "CreateExtSaveData"},
         {0x0852, &FS_USER::DeleteExtSaveData, "DeleteExtSaveData"},
-        {0x0853, nullptr, "ReadExtSaveDataIcon"},
-        {0x0854, nullptr, "GetExtDataBlockSize"},
-        {0x0855, nullptr, "EnumerateExtSaveData"},
+        {0x0853, &FS_USER::ReadExtSaveDataIcon, "ReadExtSaveDataIcon"},
+        {0x0854, &FS_USER::GetExtDataBlockSize, "GetExtDataBlockSize"},
+        {0x0855, &FS_USER::EnumerateExtSaveData, "EnumerateExtSaveData"},
         {0x0856, &FS_USER::CreateSystemSaveData, "CreateSystemSaveData"},
         {0x0857, &FS_USER::DeleteSystemSaveData, "DeleteSystemSaveData"},
         {0x0858, nullptr, "StartDeviceMoveAsSource"},
@@ -1902,6 +2034,7 @@ FS_USER::FS_USER(Core::System& system)
         {0x086A, nullptr, "ReadNandReport"},
         {0x086E, &FS_USER::SetThisSaveDataSecureValue, "SetThisSaveDataSecureValue" },
         {0x086F, &FS_USER::GetThisSaveDataSecureValue, "GetThisSaveDataSecureValue" },
+        {0x0870, &FS_USER::CheckArchive, "CheckArchive"},
         {0x0875, &FS_USER::SetSaveDataSecureValue, "SetSaveDataSecureValue" },
         {0x0876, &FS_USER::GetSaveDataSecureValue, "GetSaveDataSecureValue" },
         {0x087A, &FS_USER::AddSeed, "AddSeed"},
