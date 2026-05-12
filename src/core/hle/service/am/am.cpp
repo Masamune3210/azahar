@@ -136,11 +136,6 @@ void NCCHCryptoFile::Write(const u8* buffer, std::size_t length) {
         }
 
         if (!ncch_header.no_crypto) {
-            if (!decryption_authorized) {
-                LOG_ERROR(Service_AM, "Blocked unauthorized encrypted CIA installation.");
-                is_error = true;
-                return;
-            }
             is_encrypted = true;
 
             // Find primary and secondary keys
