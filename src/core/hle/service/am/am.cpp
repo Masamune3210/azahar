@@ -1053,11 +1053,6 @@ InstallStatus InstallCIA(const std::string& path,
             Core::System::GetInstance(),
             Service::AM::GetTitleMediaType(container.GetTitleMetadata().GetTitleID()));
 
-        if (container.GetTitleMetadata().HasEncryptedContent(container.GetHeader())) {
-            LOG_ERROR(Service_AM, "File {} is encrypted! Aborting...", path);
-            return InstallStatus::ErrorEncrypted;
-        }
-
         std::vector<u8> buffer;
         buffer.resize(0x10000);
         auto file_size = in_file->GetSize();

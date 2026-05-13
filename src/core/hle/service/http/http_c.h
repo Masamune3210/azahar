@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <functional>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -286,6 +288,12 @@ public:
     u32 chunked_content_length;
 
     std::future<void> request_future;
+    std::promise<void> response_headers_promise;
+    std::future<void> response_headers_future{response_headers_promise.get_future()};
+    std::mutex cancel_mutex;
+    std::function<void()> cancel_stop_fn;
+    std::mutex stream_mutex;
+    std::condition_variable stream_cv;
     std::atomic<u64> current_download_size_bytes;
     std::atomic<u64> total_download_size_bytes;
     std::size_t current_copied_data;
@@ -339,6 +347,7 @@ private:
 class HTTP_C final : public ServiceFramework<HTTP_C, SessionData> {
 public:
     HTTP_C();
+    ~HTTP_C();
 
     const ClCertAData& GetClCertA() const {
         return ClCertA;
@@ -836,6 +845,13 @@ private:
      */
     void CloseClientCertContext(Kernel::HLERequestContext& ctx);
 
+    void CreateRootCertChain(Kernel::HLERequestContext& ctx);
+    void DestroyRootCertChain(Kernel::HLERequestContext& ctx);
+    void RootCertChainAddCert(Kernel::HLERequestContext& ctx);
+    void RootCertChainAddDefaultCert(Kernel::HLERequestContext& ctx);
+    void RootCertChainRemoveCert(Kernel::HLERequestContext& ctx);
+    void SelectRootCertChain(Kernel::HLERequestContext& ctx);
+
     /**
      * HTTP_C::SetKeepAlive service function
      *  Inputs:
@@ -883,6 +899,9 @@ private:
     /// The next handle number to use when a new ClientCert context is created.
     ClientCertContext::Handle client_certs_counter = 0;
 
+    /// The next handle number to use when a new RootCertChain is created.
+    RootCertChain::Handle root_cert_chains_counter = 0;
+
     /// Global list of HTTP contexts currently opened.
     std::unordered_map<Context::Handle, Context> contexts;
 
@@ -896,7 +915,14 @@ private:
     /// Global list of  ClientCert contexts currently opened.
     std::unordered_map<ClientCertContext::Handle, std::shared_ptr<ClientCertContext>> client_certs;
 
+    /// Global list of RootCertChains currently opened.
+    std::unordered_map<RootCertChain::Handle, std::shared_ptr<RootCertChain>> root_cert_chains;
+
     ClCertAData ClCertA;
+
+    // Shutdown synchronization: set flag and wait for in-flight RunAsync lambdas in destructor.
+    std::shared_ptr<std::atomic<bool>> async_shutdown{std::make_shared<std::atomic<bool>>(false)};
+    std::shared_ptr<std::atomic<int>> async_pending{std::make_shared<std::atomic<int>>(0)};
 
 private:
     template <class Archive>

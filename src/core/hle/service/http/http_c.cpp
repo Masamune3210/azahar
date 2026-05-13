@@ -2,7 +2,9 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
 #include <atomic>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 #include <boost/algorithm/string/replace.hpp>
@@ -297,6 +299,27 @@ void Context::MakeRequest() {
     request.method = request_method_strings.at(method);
     request.path = url_info.path;
 
+    // Signal the headers future as soon as httplib has parsed response headers,
+    // before the body is received. This lets GetResponseStatusCode and GetResponseHeader
+    // return immediately without waiting for the full download to complete.
+    request.response_handler = [this](const httplib::Response& /*res*/) -> bool {
+        try {
+            response_headers_promise.set_value();
+        } catch (const std::future_error&) {
+        }
+        return true;
+    };
+
+    request.content_receiver = [this](const char* data, size_t data_length,
+                                       u64 /*offset*/, u64 /*total*/) -> bool {
+        {
+            std::lock_guard<std::mutex> lock(stream_mutex);
+            response.body.append(data, data_length);
+        }
+        stream_cv.notify_all();
+        return true;
+    };
+
     request.progress = [this](u64 current, u64 total) -> bool {
         // TODO(B3N30): Is there a state that shows response header are available
         current_download_size_bytes = current;
@@ -382,12 +405,25 @@ void Context::MakeRequestNonSSL(httplib::Request& request, const URLInfo& url_in
             return HandleHeaderWrite(pending_headers, strm, httplib_headers);
         });
 
+    {
+        std::lock_guard lock(cancel_mutex);
+        cancel_stop_fn = [ptr = client.get()]() { ptr->stop(); };
+    }
     if (!client->send(request, response, error)) {
-        LOG_ERROR(Service_HTTP, "Request failed: {}: {}", error, httplib::to_string(error));
+        LOG_ERROR(Service_HTTP, "MakeRequestNonSSL failed: error={} ({})", error,
+                  httplib::to_string(error));
+        try {
+            response_headers_promise.set_value();
+        } catch (const std::future_error&) {
+        }
         state = RequestState::Completed;
     } else {
-        LOG_DEBUG(Service_HTTP, "Request successful");
         state = RequestState::ReceivingBody;
+    }
+    stream_cv.notify_all();
+    {
+        std::lock_guard lock(cancel_mutex);
+        cancel_stop_fn = nullptr;
     }
 }
 
@@ -440,12 +476,25 @@ void Context::MakeRequestSSL(httplib::Request& request, const URLInfo& url_info,
             return HandleHeaderWrite(pending_headers, strm, httplib_headers);
         });
 
+    {
+        std::lock_guard lock(cancel_mutex);
+        cancel_stop_fn = [ptr = client.get()]() { ptr->stop(); };
+    }
     if (!client->send(request, response, error)) {
-        LOG_ERROR(Service_HTTP, "Request failed: {}: {}", error, httplib::to_string(error));
+        LOG_ERROR(Service_HTTP, "MakeRequestSSL failed: error={} ({})", error,
+                  httplib::to_string(error));
+        try {
+            response_headers_promise.set_value();
+        } catch (const std::future_error&) {
+        }
         state = RequestState::Completed;
     } else {
-        LOG_DEBUG(Service_HTTP, "Request successful");
         state = RequestState::ReceivingBody;
+    }
+    stream_cv.notify_all();
+    {
+        std::lock_guard lock(cancel_mutex);
+        cancel_stop_fn = nullptr;
     }
 }
 
@@ -675,21 +724,35 @@ void HTTP_C::ReceiveDataImpl(Kernel::HLERequestContext& ctx, bool timeout) {
         return;
     }
 
+    async_pending->fetch_add(1, std::memory_order_relaxed);
     ctx.RunAsync(
-        [this, async_data](Kernel::HLERequestContext& ctx) {
+        [this, async_data, sd = async_shutdown, ap = async_pending](Kernel::HLERequestContext& ctx) {
+            SCOPE_EXIT({ ap->fetch_sub(1, std::memory_order_release); });
             Context& http_context = GetContext(async_data->context_handle);
 
-            if (async_data->timeout) {
-                const auto wait_res = http_context.request_future.wait_for(
-                    std::chrono::nanoseconds(async_data->timeout_nanos));
-                if (wait_res == std::future_status::timeout) {
-                    async_data->async_res = ErrorTimeout;
+            // Wait until enough data is buffered to fill the caller's buffer, or the
+            // download finishes (in which case we deliver whatever remains).
+            const size_t target =
+                http_context.current_copied_data + async_data->buffer_size;
+            {
+                std::unique_lock<std::mutex> lock(http_context.stream_mutex);
+                auto condition = [&] {
+                    return http_context.response.body.size() >= target ||
+                           http_context.request_future.wait_for(
+                               std::chrono::milliseconds(0)) == std::future_status::ready;
+                };
+                if (async_data->timeout) {
+                    if (!http_context.stream_cv.wait_for(
+                            lock, std::chrono::nanoseconds(async_data->timeout_nanos),
+                            condition)) {
+                        async_data->async_res = ErrorTimeout;
+                    }
+                } else {
+                    http_context.stream_cv.wait(lock, condition);
                 }
-            } else {
-                http_context.request_future.wait();
             }
-            // Simulate small delay from HTTP receive.
-            return 1'000'000;
+            if (sd->load()) return -1LL;
+            return 1'000'000LL;
         },
         [this, async_data](Kernel::HLERequestContext& ctx) {
             IPC::RequestBuilder rb(ctx, static_cast<u16>(ctx.CommandHeader().command_id.Value()), 1,
@@ -700,26 +763,28 @@ void HTTP_C::ReceiveDataImpl(Kernel::HLERequestContext& ctx, bool timeout) {
             }
             Context& http_context = GetContext(async_data->context_handle);
 
-            const std::size_t remaining_data =
+            std::lock_guard<std::mutex> lock(http_context.stream_mutex);
+            const bool download_complete =
+                http_context.request_future.wait_for(std::chrono::milliseconds(0)) ==
+                std::future_status::ready;
+            const size_t available =
                 http_context.response.body.size() - http_context.current_copied_data;
+            const size_t to_copy =
+                std::min(available, static_cast<size_t>(async_data->buffer_size));
 
-            if (async_data->buffer_size >= remaining_data) {
+            if (to_copy > 0) {
                 async_data->buffer->Write(http_context.response.body.data() +
                                               http_context.current_copied_data,
-                                          0, remaining_data);
-                http_context.current_copied_data += remaining_data;
+                                          0, to_copy);
+                http_context.current_copied_data += to_copy;
+            }
+
+            if (download_complete && to_copy == available) {
                 http_context.state = RequestState::Completed;
                 rb.Push(ResultSuccess);
             } else {
-                async_data->buffer->Write(http_context.response.body.data() +
-                                              http_context.current_copied_data,
-                                          0, async_data->buffer_size);
-                http_context.current_copied_data += async_data->buffer_size;
                 rb.Push(ErrorBufferSmall);
             }
-            LOG_DEBUG(Service_HTTP, "Receive: buffer_size= {}, total_copied={}, total_body={}",
-                      async_data->buffer_size, http_context.current_copied_data,
-                      http_context.response.body.size());
         });
 }
 
@@ -836,14 +901,18 @@ void HTTP_C::CancelConnection(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
     const u32 context_handle = rp.Pop<u32>();
 
-    LOG_WARNING(Service_HTTP, "(STUBBED) called, handle={}", context_handle);
-
     const auto* session_data = EnsureSessionInitialized(ctx, rp);
     if (!session_data) {
         return;
     }
 
-    [[maybe_unused]] Context& http_context = GetContext(context_handle);
+    Context& http_context = GetContext(context_handle);
+    {
+        std::lock_guard lock(http_context.cancel_mutex);
+        if (http_context.cancel_stop_fn) {
+            http_context.cancel_stop_fn();
+        }
+    }
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(ResultSuccess);
@@ -1445,8 +1514,10 @@ void HTTP_C::GetResponseDataImpl(Kernel::HLERequestContext& ctx, bool timeout) {
         return;
     }
 
+    async_pending->fetch_add(1, std::memory_order_relaxed);
     ctx.RunAsync(
-        [this, async_data](Kernel::HLERequestContext& ctx) {
+        [this, async_data, sd = async_shutdown, ap = async_pending](Kernel::HLERequestContext& ctx) {
+            SCOPE_EXIT({ ap->fetch_sub(1, std::memory_order_release); });
             Context& http_context = GetContext(async_data->context_handle);
 
             if (async_data->timeout) {
@@ -1459,7 +1530,7 @@ void HTTP_C::GetResponseDataImpl(Kernel::HLERequestContext& ctx, bool timeout) {
                 http_context.request_future.wait();
             }
 
-            return 0;
+            return sd->load() ? -1LL : 0LL;
         },
         [this, async_data](Kernel::HLERequestContext& ctx) {
             IPC::RequestBuilder rb(ctx, 2, 0);
@@ -1540,21 +1611,23 @@ void HTTP_C::GetResponseHeaderImpl(Kernel::HLERequestContext& ctx, bool timeout)
         return;
     }
 
+    async_pending->fetch_add(1, std::memory_order_relaxed);
     ctx.RunAsync(
-        [this, async_data](Kernel::HLERequestContext& ctx) {
+        [this, async_data, sd = async_shutdown, ap = async_pending](Kernel::HLERequestContext& ctx) {
+            SCOPE_EXIT({ ap->fetch_sub(1, std::memory_order_release); });
             Context& http_context = GetContext(async_data->context_handle);
 
             if (async_data->timeout) {
-                const auto wait_res = http_context.request_future.wait_for(
+                const auto wait_res = http_context.response_headers_future.wait_for(
                     std::chrono::nanoseconds(async_data->timeout_nanos));
                 if (wait_res == std::future_status::timeout) {
                     async_data->async_res = ErrorTimeout;
                 }
             } else {
-                http_context.request_future.wait();
+                http_context.response_headers_future.wait();
             }
 
-            return 0;
+            return sd->load() ? -1LL : 0LL;
         },
         [this, async_data](Kernel::HLERequestContext& ctx) {
             IPC::RequestBuilder rb(ctx, static_cast<u16>(ctx.CommandHeader().command_id.Value()), 2,
@@ -1631,30 +1704,29 @@ void HTTP_C::GetResponseStatusCodeImpl(Kernel::HLERequestContext& ctx, bool time
 
     if (timeout) {
         async_data->timeout_nanos = rp.Pop<u64>();
-        LOG_INFO(Service_HTTP, "called, timeout={}", async_data->timeout_nanos);
-    } else {
-        LOG_INFO(Service_HTTP, "called");
     }
 
     if (!PerformStateChecks(ctx, rp, async_data->context_handle)) {
         return;
     }
 
+    async_pending->fetch_add(1, std::memory_order_relaxed);
     ctx.RunAsync(
-        [this, async_data](Kernel::HLERequestContext& ctx) {
+        [this, async_data, sd = async_shutdown, ap = async_pending](Kernel::HLERequestContext& ctx) {
+            SCOPE_EXIT({ ap->fetch_sub(1, std::memory_order_release); });
             Context& http_context = GetContext(async_data->context_handle);
 
             if (async_data->timeout) {
-                const auto wait_res = http_context.request_future.wait_for(
+                const auto wait_res = http_context.response_headers_future.wait_for(
                     std::chrono::nanoseconds(async_data->timeout_nanos));
                 if (wait_res == std::future_status::timeout) {
                     LOG_DEBUG(Service_HTTP, "Status code: {}", "timeout");
                     async_data->async_res = ErrorTimeout;
                 }
             } else {
-                http_context.request_future.wait();
+                http_context.response_headers_future.wait();
             }
-            return 0;
+            return sd->load() ? -1LL : 0LL;
         },
         [this, async_data](Kernel::HLERequestContext& ctx) {
             if (async_data->async_res != ResultSuccess) {
@@ -1665,6 +1737,15 @@ void HTTP_C::GetResponseStatusCodeImpl(Kernel::HLERequestContext& ctx, bool time
             }
 
             Context& http_context = GetContext(async_data->context_handle);
+
+            // If headers were never received (send failed before response_handler fired),
+            // status will still be -1; treat that as a connection error.
+            if (http_context.response.status < 0) {
+                IPC::RequestBuilder rb(
+                    ctx, static_cast<u16>(ctx.CommandHeader().command_id.Value()), 1, 0);
+                rb.Push(ErrorStateError);
+                return;
+            }
 
             const u32 response_code = http_context.response.status;
             LOG_DEBUG(Service_HTTP, "Status code: {}, response_code={}", "good", response_code);
@@ -2007,8 +2088,6 @@ void HTTP_C::GetDownloadSizeState(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
     const Context::Handle context_handle = rp.Pop<u32>();
 
-    LOG_INFO(Service_HTTP, "called");
-
     const auto* session_data = EnsureSessionInitialized(ctx, rp);
     if (!session_data) {
         return;
@@ -2016,17 +2095,20 @@ void HTTP_C::GetDownloadSizeState(Kernel::HLERequestContext& ctx) {
 
     Context& http_context = GetContext(context_handle);
 
-    // On the real console, the current downloaded progress and the total size of the content gets
-    // returned. Since we do not support chunked downloads on the host, always return the content
-    // length if the download is complete and 0 otherwise.
+    // Return Content-Length from response headers as soon as headers are available, matching
+    // real hardware behavior where totalSize is populated before body bytes arrive.
     u32 content_length = 0;
-    const bool is_complete = http_context.request_future.wait_for(std::chrono::milliseconds(0)) ==
-                             std::future_status::ready;
-    if (is_complete) {
+    const bool headers_ready =
+        http_context.response_headers_future.wait_for(std::chrono::milliseconds(0)) ==
+        std::future_status::ready;
+    if (headers_ready) {
         const auto& headers = http_context.response.headers;
-        const auto& it = headers.find("Content-Length");
+        const auto it = headers.find("Content-Length");
         if (it != headers.end()) {
-            content_length = std::stoi(it->second);
+            try {
+                content_length = static_cast<u32>(std::stoul(it->second));
+            } catch (const std::exception&) {
+            }
         }
     }
 
@@ -2171,6 +2253,163 @@ void HTTP_C::DecryptClCertA() {
     ClCertA.init = true;
 }
 
+void HTTP_C::CreateRootCertChain(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+
+    auto* session_data = EnsureSessionInitialized(ctx, rp);
+    if (!session_data) {
+        return;
+    }
+
+    auto chain = std::make_shared<RootCertChain>();
+    chain->handle = ++root_cert_chains_counter;
+    chain->session_id = session_data->session_id;
+    root_cert_chains[chain->handle] = chain;
+
+    LOG_DEBUG(Service_HTTP, "called, chain_handle={}", chain->handle);
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
+    rb.Push(ResultSuccess);
+    rb.Push(chain->handle);
+}
+
+void HTTP_C::DestroyRootCertChain(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const RootCertChain::Handle chain_handle = rp.Pop<u32>();
+
+    LOG_DEBUG(Service_HTTP, "called, chain_handle={}", chain_handle);
+
+    auto* session_data = EnsureSessionInitialized(ctx, rp);
+    if (!session_data) {
+        return;
+    }
+
+    root_cert_chains.erase(chain_handle);
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    rb.Push(ResultSuccess);
+}
+
+void HTTP_C::RootCertChainAddCert(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const RootCertChain::Handle chain_handle = rp.Pop<u32>();
+    const u32 cert_size = rp.Pop<u32>();
+    auto& cert_buffer = rp.PopMappedBuffer();
+
+    LOG_DEBUG(Service_HTTP, "called, chain_handle={}, cert_size={}", chain_handle, cert_size);
+
+    auto* session_data = EnsureSessionInitialized(ctx, rp);
+    if (!session_data) {
+        return;
+    }
+
+    auto it = root_cert_chains.find(chain_handle);
+    if (it == root_cert_chains.end()) {
+        IPC::RequestBuilder rb = rp.MakeBuilder(2, 2);
+        rb.Push(ErrorStateError);
+        rb.Push<u32>(0);
+        rb.PushMappedBuffer(cert_buffer);
+        return;
+    }
+
+    RootCertChain::RootCACert cert;
+    cert.handle = static_cast<u32>(it->second->certificates.size()) + 1;
+    cert.session_id = session_data->session_id;
+    cert.certificate.resize(cert_size);
+    cert_buffer.Read(cert.certificate.data(), 0, cert_size);
+    const u32 cert_handle = cert.handle;
+    it->second->certificates.push_back(std::move(cert));
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 2);
+    rb.Push(ResultSuccess);
+    rb.Push(cert_handle);
+    rb.PushMappedBuffer(cert_buffer);
+}
+
+void HTTP_C::RootCertChainAddDefaultCert(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const RootCertChain::Handle chain_handle = rp.Pop<u32>();
+    const u32 cert_id = rp.Pop<u32>();
+
+    LOG_DEBUG(Service_HTTP, "called, chain_handle={}, cert_id={}", chain_handle, cert_id);
+
+    auto* session_data = EnsureSessionInitialized(ctx, rp);
+    if (!session_data) {
+        return;
+    }
+
+    auto it = root_cert_chains.find(chain_handle);
+    if (it == root_cert_chains.end()) {
+        IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
+        rb.Push(ErrorStateError);
+        rb.Push<u32>(0);
+        return;
+    }
+
+    RootCertChain::RootCACert cert;
+    cert.handle = static_cast<u32>(it->second->certificates.size()) + 1;
+    cert.session_id = session_data->session_id;
+    const u32 cert_handle = cert.handle;
+    it->second->certificates.push_back(std::move(cert));
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
+    rb.Push(ResultSuccess);
+    rb.Push(cert_handle);
+}
+
+void HTTP_C::RootCertChainRemoveCert(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const RootCertChain::Handle chain_handle = rp.Pop<u32>();
+    const u32 cert_handle = rp.Pop<u32>();
+
+    LOG_DEBUG(Service_HTTP, "called, chain_handle={}, cert_handle={}", chain_handle, cert_handle);
+
+    auto* session_data = EnsureSessionInitialized(ctx, rp);
+    if (!session_data) {
+        return;
+    }
+
+    auto it = root_cert_chains.find(chain_handle);
+    if (it != root_cert_chains.end()) {
+        auto& certs = it->second->certificates;
+        certs.erase(std::remove_if(certs.begin(), certs.end(),
+                                   [cert_handle](const RootCertChain::RootCACert& c) {
+                                       return c.handle == cert_handle;
+                                   }),
+                    certs.end());
+    }
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    rb.Push(ResultSuccess);
+}
+
+void HTTP_C::SelectRootCertChain(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const Context::Handle context_handle = rp.Pop<u32>();
+    const RootCertChain::Handle chain_handle = rp.Pop<u32>();
+
+    LOG_DEBUG(Service_HTTP, "called, context_handle={}, chain_handle={}", context_handle,
+              chain_handle);
+
+    if (!PerformStateChecks(ctx, rp, context_handle)) {
+        return;
+    }
+
+    Context& http_context = GetContext(context_handle);
+
+    auto it = root_cert_chains.find(chain_handle);
+    if (it == root_cert_chains.end()) {
+        IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+        rb.Push(ErrorStateError);
+        return;
+    }
+
+    http_context.ssl_config.root_ca_chain = it->second;
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    rb.Push(ResultSuccess);
+}
+
 HTTP_C::HTTP_C() : ServiceFramework("http:C", 32) {
     static const FunctionInfo functions[] = {
         // clang-format off
@@ -2211,18 +2450,18 @@ HTTP_C::HTTP_C() : ServiceFramework("http:C", 32) {
         {0x0023, &HTTP_C::GetResponseStatusCodeTimeout, "GetResponseStatusCodeTimeout"},
         {0x0024, &HTTP_C::AddTrustedRootCA, "AddTrustedRootCA"},
         {0x0025, &HTTP_C::AddDefaultCert, "AddDefaultCert"},
-        {0x0026, nullptr, "SelectRootCertChain"},
+        {0x0026, &HTTP_C::SelectRootCertChain, "SelectRootCertChain"},
         {0x0027, nullptr, "SetClientCert"},
         {0x0028, &HTTP_C::SetDefaultClientCert, "SetDefaultClientCert"},
         {0x0029, &HTTP_C::SetClientCertContext, "SetClientCertContext"},
         {0x002A, &HTTP_C::GetSSLError, "GetSSLError"},
         {0x002B, &HTTP_C::SetSSLOpt, "SetSSLOpt"},
         {0x002C, nullptr, "SetSSLClearOpt"},
-        {0x002D, nullptr, "CreateRootCertChain"},
-        {0x002E, nullptr, "DestroyRootCertChain"},
-        {0x002F, nullptr, "RootCertChainAddCert"},
-        {0x0030, nullptr, "RootCertChainAddDefaultCert"},
-        {0x0031, nullptr, "RootCertChainRemoveCert"},
+        {0x002D, &HTTP_C::CreateRootCertChain, "CreateRootCertChain"},
+        {0x002E, &HTTP_C::DestroyRootCertChain, "DestroyRootCertChain"},
+        {0x002F, &HTTP_C::RootCertChainAddCert, "RootCertChainAddCert"},
+        {0x0030, &HTTP_C::RootCertChainAddDefaultCert, "RootCertChainAddDefaultCert"},
+        {0x0031, &HTTP_C::RootCertChainRemoveCert, "RootCertChainRemoveCert"},
         {0x0032, &HTTP_C::OpenClientCertContext, "OpenClientCertContext"},
         {0x0033, &HTTP_C::OpenDefaultClientCertContext, "OpenDefaultClientCertContext"},
         {0x0034, &HTTP_C::CloseClientCertContext, "CloseClientCertContext"},
@@ -2236,6 +2475,19 @@ HTTP_C::HTTP_C() : ServiceFramework("http:C", 32) {
     RegisterHandlers(functions);
 
     DecryptClCertA();
+}
+
+HTTP_C::~HTTP_C() {
+    *async_shutdown = true;
+    for (auto& [handle, ctx] : contexts) {
+        std::lock_guard lock(ctx.cancel_mutex);
+        if (ctx.cancel_stop_fn) {
+            ctx.cancel_stop_fn();
+        }
+    }
+    while (async_pending->load(std::memory_order_acquire) > 0) {
+        std::this_thread::yield();
+    }
 }
 
 std::shared_ptr<HTTP_C> GetService(Core::System& system) {

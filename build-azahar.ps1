@@ -70,3 +70,23 @@ try {
 } finally {
     Pop-Location
 }
+
+# Only reached if build succeeded (failures call exit above)
+$ReleaseDir = "$BuildDir\bin\Release"
+$DeployDir  = "F:\Emulation\Emulators\Azahar"
+Write-Host "Deploying $ReleaseDir -> $DeployDir..." -ForegroundColor Cyan
+$deployFailed = 0
+foreach ($item in Get-ChildItem $ReleaseDir) {
+    try {
+        Copy-Item $item.FullName -Destination $DeployDir -Force -ErrorAction Stop
+        Remove-Item $item.FullName -Recurse -Force -ErrorAction Stop
+    } catch {
+        Write-Warning "Failed to deploy $($item.Name): $_"
+        $deployFailed++
+    }
+}
+if ($deployFailed -gt 0) {
+    Write-Host "Deploy finished with $deployFailed file(s) that could not be replaced (emulator still open?)." -ForegroundColor Yellow
+    exit 1
+}
+Write-Host "Deploy complete." -ForegroundColor Green
