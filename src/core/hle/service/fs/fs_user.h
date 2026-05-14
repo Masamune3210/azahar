@@ -622,6 +622,20 @@ private:
     void GetFormatInfo(Kernel::HLERequestContext& ctx);
 
     /**
+     * FS_User::GetSdmcCtrRootPath service function (0x08480042).
+     * Retrieves the /Nintendo 3DS/<ID0>/<ID1> path as a UTF-16LE wide string.
+     *  Inputs:
+     *      0 : 0x08480042
+     *      1 : Buffer size in wide characters (including null terminator)
+     *      2 : (bytesize << 4) | 0xC  (output buffer descriptor)
+     *      3 : Output buffer pointer
+     *  Outputs:
+     *      0 : Header code
+     *      1 : Result code
+     */
+    void GetSdmcCtrRootPath(Kernel::HLERequestContext& ctx);
+
+    /**
      * FS_User::GetProductInfo service function.
      *  Inputs:
      *      0 : 0x082E0040

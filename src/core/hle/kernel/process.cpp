@@ -47,7 +47,7 @@ SERIALIZE_IMPL(AddressMapping)
 
 template <class Archive>
 void Process::serialize(Archive& ar, const unsigned int) {
-    ar& boost::serialization::base_object<Object>(*this);
+    ar& boost::serialization::base_object<WaitObject>(*this);
     ar & handle_table;
     ar & codeset; // TODO: Replace with apploader reference
     ar & resource_limit;
@@ -121,6 +121,9 @@ void KernelSystem::TerminateProcess(std::shared_ptr<Process> process) {
 
     ASSERT_MSG(process->status == ProcessStatus::Running, "Process has already exited");
     process->status = ProcessStatus::Exited;
+
+    // Wake up any threads waiting for this process to exit.
+    process->WakeupAllWaitingThreads();
 
     // Stop all process threads.
     for (u32 core = 0; core < Core::GetNumCores(); core++) {
@@ -275,6 +278,14 @@ void Process::Run(s32 main_thread_priority, u32 stack_size) {
 #endif
         Core::System::GetInstance().ClearDebugNextProcessFlag();
     }
+}
+
+bool Process::ShouldWait(const Thread* thread) const {
+    return status != ProcessStatus::Exited;
+}
+
+void Process::Acquire(Thread* thread) {
+    ASSERT_MSG(!ShouldWait(thread), "object unavailable!");
 }
 
 void Process::Exit() {
@@ -684,7 +695,7 @@ void Process::FreeAllMemory() {
 }
 
 Kernel::Process::Process(KernelSystem& kernel)
-    : Object(kernel), handle_table(kernel), vm_manager(kernel.memory, *this), kernel(kernel) {
+    : WaitObject(kernel), handle_table(kernel), vm_manager(kernel.memory, *this), kernel(kernel) {
     kernel.memory.RegisterPageTable(vm_manager.page_table);
 }
 Kernel::Process::~Process() {

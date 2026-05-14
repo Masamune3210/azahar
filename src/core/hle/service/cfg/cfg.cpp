@@ -445,8 +445,11 @@ void Module::Interface::GetRegion(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
 
     u64 caller_tid = ctx.ClientThread()->owner_process.lock()->codeset->program_id;
+    // Default to reading from SecureInfo_A so that CFGU_SecureInfoGetRegion returns
+    // the correct hardware region when a dump is present. Falls back to auto-detect
+    // (preferred region / settings) when SecureInfo_A is absent or invalid.
     bool from_secure_info = Common::Hacks::hack_manager.OverrideBooleanSetting(
-        Common::Hacks::HackType::REGION_FROM_SECURE, caller_tid, false);
+        Common::Hacks::HackType::REGION_FROM_SECURE, caller_tid, true);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(ResultSuccess);

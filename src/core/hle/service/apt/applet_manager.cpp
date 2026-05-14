@@ -153,13 +153,6 @@ static u64 ConvertTitleID(Core::System& system, u64 base_title_id) {
     return base_title_id;
 }
 
-static bool IsSystemAppletId(AppletId applet_id) {
-    return (static_cast<u32>(applet_id) & static_cast<u32>(AppletId::AnySystemApplet)) != 0;
-}
-
-static bool IsApplicationAppletId(AppletId applet_id) {
-    return (static_cast<u32>(applet_id) & static_cast<u32>(AppletId::Application)) != 0;
-}
 
 AppletManager::AppletSlot AppletManager::GetAppletSlotFromId(AppletId id) {
     if (id == AppletId::Application) {
@@ -254,10 +247,6 @@ AppletManager::AppletSlot AppletManager::GetAppletSlotFromPos(AppletPos pos) {
 }
 
 void AppletManager::CancelAndSendParameter(const MessageParameter& parameter) {
-    LOG_DEBUG(
-        Service_APT, "Sending parameter from {:03X} to {:03X} with signal {:08X} and size {:08X}",
-        parameter.sender_id, parameter.destination_id, parameter.signal, parameter.buffer.size());
-
     // If the applet is being HLEd, send directly to the applet.
     const auto applet = hle_applets[parameter.destination_id];
     if (applet != nullptr) {
@@ -267,7 +256,7 @@ void AppletManager::CancelAndSendParameter(const MessageParameter& parameter) {
         next_parameter = parameter;
 
         if (parameter.signal == SignalType::RequestForSysApplet) {
-            // APT handles RequestForSysApplet messages itself.
+            // APT handles RequestForSysApplet messages itself by sending back a Response.
             LOG_DEBUG(Service_APT, "Replying to RequestForSysApplet from {:03X}",
                       parameter.sender_id);
 
@@ -280,12 +269,24 @@ void AppletManager::CancelAndSendParameter(const MessageParameter& parameter) {
             next_parameter->destination_id = parameter.sender_id;
             next_parameter->signal = SignalType::Response;
             next_parameter->buffer.clear();
-            next_parameter->object = nullptr;
-        } else if (IsSystemAppletId(parameter.sender_id) &&
-                   IsApplicationAppletId(parameter.destination_id) && parameter.object) {
-            // When a message is sent from a system applet to an application, APT
-            // replaces its object with the zero handle.
-            next_parameter->object = nullptr;
+            // Provide a pre-signaled event so the app can svcWaitSynchronizationN on it without
+            // hanging or crashing with handle=0. The real NS firmware does the same.
+            auto event = system.Kernel().CreateEvent(Kernel::ResetType::OneShot,
+                                                     "APT:RequestForSysApplet response");
+            event->Signal();
+            next_parameter->object = std::move(event);
+        }
+
+        // If a Wakeup is sent with no event object (e.g. HOME Menu waking up an application
+        // after returning from a system applet), the application will call svcSignalEvent or
+        // svcWaitSynchronizationN on the received handle. If that handle is 0 the syscall
+        // returns ResultInvalidHandle and the app crashes. Provide a pre-signaled event so
+        // that any such handle is always valid and resolves immediately.
+        if (parameter.signal == SignalType::Wakeup && !next_parameter->object) {
+            auto event = system.Kernel().CreateEvent(Kernel::ResetType::OneShot,
+                                                     "APT:Wakeup event");
+            event->Signal();
+            next_parameter->object = std::move(event);
         }
 
         // Signal the event to let the receiver know that a new parameter is ready to be read
@@ -411,11 +412,18 @@ ResultVal<AppletManager::InitializeResult> AppletManager::Initialize(AppletId ap
         // APT automatically calls enable on the first registered applet.
         Enable(attributes);
 
-        // Wake up the applet.
+        // Wake up the applet.  Provide a pre-signaled event so that downstream code
+        // (e.g. HOME Menu) can safely pass it along when waking up an application; an app
+        // that calls svcWaitSynchronizationN or svcSignalEvent on the received handle will
+        // not crash even if it does not first check for handle=0.
+        auto wakeup_event = system.Kernel().CreateEvent(Kernel::ResetType::OneShot,
+                                                        "APT:RegisterApplet wakeup");
+        wakeup_event->Signal();
         SendParameter({
             .sender_id = AppletId::None,
             .destination_id = app_id,
             .signal = SignalType::Wakeup,
+            .object = std::move(wakeup_event),
         });
     }
 
@@ -1036,6 +1044,15 @@ Result AppletManager::PrepareToLeaveHomeMenu() {
 Result AppletManager::LeaveHomeMenu(std::shared_ptr<Kernel::Object> object,
                                     const std::vector<u8>& buffer) {
     active_slot = AppletSlot::Application;
+
+    // If no event was provided (HOME Menu passed handle=0), supply a pre-signaled event so the
+    // application can safely call svcSignalEvent on the received handle without crashing.
+    if (!object) {
+        auto event = system.Kernel().CreateEvent(Kernel::ResetType::OneShot,
+                                                 "APT:LeaveHomeMenu wakeup confirm");
+        event->Signal();
+        object = std::move(event);
+    }
 
     SendParameter({
         .sender_id = AppletId::HomeMenu,

@@ -46,6 +46,33 @@
 
 namespace Kernel {
 
+/// A WaitObject that is permanently unavailable (ShouldWait always returns true).
+/// Used as a placeholder for null handles (handle == 0) in svcWaitSynchronizationN so that
+/// null-handle slots are silently ignored instead of causing a ResultInvalidHandle crash.
+/// The real 3DS kernel appears to allow handle 0 in WaitSynchronizationN arrays; it effectively
+/// acts as a slot that never fires, letting the other handles drive the wakeup logic.
+class NullWaitObject final : public WaitObject {
+public:
+    explicit NullWaitObject(KernelSystem& kernel) : WaitObject(kernel) {}
+
+    std::string GetTypeName() const override {
+        return "NullWaitObject";
+    }
+    std::string GetName() const override {
+        return "NullWaitObject (null-handle placeholder)";
+    }
+    HandleType GetHandleType() const override {
+        return HandleType::Unknown;
+    }
+
+    /// Never becomes available — null-handle slot never wins a WaitSynchronizationN race.
+    bool ShouldWait(const Thread*) const override {
+        return true;
+    }
+    /// No-op: null-handle slot has nothing to acquire.
+    void Acquire(Thread*) override {}
+};
+
 enum ControlMemoryOperation {
     MEMOP_FREE = 1,
     MEMOP_RESERVE = 2, // This operation seems to be unsupported in the kernel
@@ -849,7 +876,18 @@ Result SVC::WaitSynchronizationN(s32* out, VAddr handles_address, s32 handle_cou
     for (int i = 0; i < handle_count; ++i) {
         Handle handle = memory.Read32(handles_address + i * sizeof(Handle));
         auto object = kernel.GetCurrentProcess()->handle_table.Get<WaitObject>(handle);
-        R_UNLESS(object, ResultInvalidHandle);
+        if (!object) {
+            // Handle 0 (null) appears in some official Nintendo APT library builds where
+            // aptSleepSync is 0 because NotifyToWait has not yet delivered the sleep-sync event.
+            // On real hardware the 3DS kernel treats a null handle in WaitSynchronizationN as a
+            // slot that is permanently unavailable (never fires), letting the other valid handles
+            // determine when the thread wakes.  Emulate this with a NullWaitObject.
+            if (handle == 0) {
+                objects[i] = std::make_shared<NullWaitObject>(kernel);
+                continue;
+            }
+            return ResultInvalidHandle;
+        }
         objects[i] = object;
     }
 
@@ -1563,7 +1601,7 @@ Result SVC::DuplicateHandle(Handle* out, Handle handle) {
 Result SVC::SignalEvent(Handle handle) {
     LOG_TRACE(Kernel_SVC, "called event=0x{:08X}", handle);
 
-    std::shared_ptr<Event> evt = kernel.GetCurrentProcess()->handle_table.Get<Event>(handle);
+    auto evt = kernel.GetCurrentProcess()->handle_table.Get<Event>(handle);
     R_UNLESS(evt, ResultInvalidHandle);
 
     evt->Signal();

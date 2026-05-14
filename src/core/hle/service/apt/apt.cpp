@@ -357,9 +357,9 @@ void Module::APTInterface::NotifyToWait(Kernel::HLERequestContext& ctx) {
     const auto app_id = rp.Pop<u32>();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
-    rb.Push(ResultSuccess); // No error
+    rb.Push(ResultSuccess);
 
-    LOG_WARNING(Service_APT, "(STUBBED) app_id={}", app_id);
+    LOG_DEBUG(Service_APT, "(STUBBED) app_id={}", app_id);
 }
 
 void Module::APTInterface::GetLockHandle(Kernel::HLERequestContext& ctx) {
@@ -489,10 +489,11 @@ void Module::APTInterface::SendParameter(Kernel::HLERequestContext& ctx) {
     const auto object = rp.PopGenericObject();
     const auto buffer = rp.PopStaticBuffer();
 
-    LOG_DEBUG(Service_APT,
-              "called src_app_id={:#010X}, dst_app_id={:#010X}, signal_type={:#010X},"
-              "buffer_size={:#010X}",
-              src_app_id, dst_app_id, signal_type, buffer_size);
+    LOG_WARNING(Service_APT,
+                "called src_app_id={:#010X}, dst_app_id={:#010X}, signal_type={:#010X},"
+                "buffer_size={:#010X}, object={}",
+                src_app_id, dst_app_id, signal_type, buffer_size,
+                object ? object->GetName() : "(null)");
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(apt->applet_manager->SendParameter({
@@ -509,25 +510,25 @@ void Module::APTInterface::ReceiveParameter(Kernel::HLERequestContext& ctx) {
     const auto app_id = rp.PopEnum<AppletId>();
     const auto buffer_size = rp.Pop<u32>();
 
-    LOG_DEBUG(Service_APT, "called app_id={:#010X}, buffer_size={:#010X}", app_id, buffer_size);
+    LOG_DEBUG(Service_APT, "called app_id={:#06X}, buffer_size={:#010X}", app_id, buffer_size);
 
     auto next_parameter = apt->applet_manager->ReceiveParameter(app_id);
     if (next_parameter.Failed()) {
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
         rb.Push(next_parameter.Code());
-    } else {
-        const auto size = std::min(static_cast<u32>(next_parameter->buffer.size()), buffer_size);
-        next_parameter->buffer.resize(
-            buffer_size); // APT always push a buffer with the maximum size
-
-        IPC::RequestBuilder rb = rp.MakeBuilder(4, 4);
-        rb.Push(ResultSuccess); // No error
-        rb.PushEnum(next_parameter->sender_id);
-        rb.PushEnum(next_parameter->signal); // Signal type
-        rb.Push(size);                       // Parameter buffer size
-        rb.PushMoveObjects(next_parameter->object);
-        rb.PushStaticBuffer(std::move(next_parameter->buffer), 0);
+        return;
     }
+
+    const auto size = std::min(static_cast<u32>(next_parameter->buffer.size()), buffer_size);
+    next_parameter->buffer.resize(buffer_size); // APT always push a buffer with the maximum size
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(4, 4);
+    rb.Push(ResultSuccess); // No error
+    rb.PushEnum(next_parameter->sender_id);
+    rb.PushEnum(next_parameter->signal); // Signal type
+    rb.Push(size);                       // Parameter buffer size
+    rb.PushMoveObjects(next_parameter->object);
+    rb.PushStaticBuffer(std::move(next_parameter->buffer), 0);
 }
 
 void Module::APTInterface::GlanceParameter(Kernel::HLERequestContext& ctx) {
@@ -535,25 +536,25 @@ void Module::APTInterface::GlanceParameter(Kernel::HLERequestContext& ctx) {
     const auto app_id = rp.PopEnum<AppletId>();
     const u32 buffer_size = rp.Pop<u32>();
 
-    LOG_DEBUG(Service_APT, "called app_id={:#010X}, buffer_size={:#010X}", app_id, buffer_size);
+    LOG_DEBUG(Service_APT, "called app_id={:#06X}, buffer_size={:#010X}", app_id, buffer_size);
 
     auto next_parameter = apt->applet_manager->GlanceParameter(app_id);
     if (next_parameter.Failed()) {
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
         rb.Push(next_parameter.Code());
-    } else {
-        const auto size = std::min(static_cast<u32>(next_parameter->buffer.size()), buffer_size);
-        next_parameter->buffer.resize(
-            buffer_size); // APT always push a buffer with the maximum size
-
-        IPC::RequestBuilder rb = rp.MakeBuilder(4, 4);
-        rb.Push(ResultSuccess); // No error
-        rb.PushEnum(next_parameter->sender_id);
-        rb.PushEnum(next_parameter->signal); // Signal type
-        rb.Push(size);                       // Parameter buffer size
-        rb.PushMoveObjects(next_parameter->object);
-        rb.PushStaticBuffer(std::move(next_parameter->buffer), 0);
+        return;
     }
+
+    const auto size = std::min(static_cast<u32>(next_parameter->buffer.size()), buffer_size);
+    next_parameter->buffer.resize(buffer_size); // APT always push a buffer with the maximum size
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(4, 4);
+    rb.Push(ResultSuccess); // No error
+    rb.PushEnum(next_parameter->sender_id);
+    rb.PushEnum(next_parameter->signal); // Signal type
+    rb.Push(size);                       // Parameter buffer size
+    rb.PushCopyObjects(next_parameter->object);
+    rb.PushStaticBuffer(std::move(next_parameter->buffer), 0);
 }
 
 void Module::APTInterface::CancelParameter(Kernel::HLERequestContext& ctx) {
@@ -1010,7 +1011,8 @@ void Module::APTInterface::JumpToHomeMenu(Kernel::HLERequestContext& ctx) {
     const auto object = rp.PopGenericObject();
     const auto buffer = rp.PopStaticBuffer();
 
-    LOG_DEBUG(Service_APT, "called size={}", parameter_size);
+    LOG_WARNING(Service_APT, "called size={}, object={}", parameter_size,
+                object ? object->GetName() : "(null)");
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(apt->applet_manager->JumpToHomeMenu(object, buffer));
@@ -1031,7 +1033,8 @@ void Module::APTInterface::LeaveHomeMenu(Kernel::HLERequestContext& ctx) {
     const auto object = rp.PopGenericObject();
     const auto buffer = rp.PopStaticBuffer();
 
-    LOG_DEBUG(Service_APT, "called size={}", parameter_size);
+    LOG_WARNING(Service_APT, "called size={}, object={}", parameter_size,
+                object ? object->GetName() : "(null)");
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(apt->applet_manager->LeaveHomeMenu(object, buffer));

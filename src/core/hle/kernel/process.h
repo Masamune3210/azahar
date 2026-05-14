@@ -17,6 +17,7 @@
 #include "core/hle/kernel/handle_table.h"
 #include "core/hle/kernel/object.h"
 #include "core/hle/kernel/vm_manager.h"
+#include "core/hle/kernel/wait_object.h"
 
 namespace Kernel {
 
@@ -124,7 +125,7 @@ private:
     void serialize(Archive& ar, const unsigned int);
 };
 
-class Process final : public Object {
+class Process final : public WaitObject {
 public:
     explicit Process(Kernel::KernelSystem& kernel);
     ~Process() override;
@@ -140,6 +141,10 @@ public:
     HandleType GetHandleType() const override {
         return HANDLE_TYPE;
     }
+
+    /// WaitObject interface: a process can be waited on; it becomes available when it exits.
+    bool ShouldWait(const Thread* thread) const override;
+    void Acquire(Thread* thread) override;
 
     HandleTable handle_table;
 

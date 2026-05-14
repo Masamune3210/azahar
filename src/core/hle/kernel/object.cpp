@@ -25,11 +25,11 @@ bool Object::IsWaitable() const {
     case HandleType::Timer:
     case HandleType::ServerPort:
     case HandleType::ServerSession:
+    case HandleType::Process:
         return true;
 
     case HandleType::Unknown:
     case HandleType::SharedMemory:
-    case HandleType::Process:
     case HandleType::AddressArbiter:
     case HandleType::ResourceLimit:
     case HandleType::CodeSet:

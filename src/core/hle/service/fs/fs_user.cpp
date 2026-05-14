@@ -1339,6 +1339,31 @@ void FS_USER::GetFormatInfo(Kernel::HLERequestContext& ctx) {
     rb.Push<bool>(format_info->duplicate_data != 0);
 }
 
+void FS_USER::GetSdmcCtrRootPath(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const u32 buffer_size = rp.Pop<u32>(); // in wide characters, including null terminator
+    auto& output_buffer = rp.PopMappedBuffer();
+
+    // Path is /Nintendo 3DS/<ID0>/<ID1>; both IDs are all-zero in the emulator
+    const std::string path = fmt::format("/Nintendo 3DS/{}/{}", SYSTEM_ID, SDCARD_ID);
+
+    LOG_DEBUG(Service_FS, "buffer_size={} path={}", buffer_size, path);
+
+    // Write as UTF-16LE; all characters in this path are ASCII so each code unit is just the byte
+    const u32 chars_to_write = std::min(static_cast<u32>(path.size()), buffer_size - 1);
+    for (u32 i = 0; i < chars_to_write; ++i) {
+        const u16 wc = static_cast<u16>(static_cast<unsigned char>(path[i]));
+        output_buffer.Write(&wc, i * sizeof(u16), sizeof(u16));
+    }
+    if (buffer_size > 0) {
+        const u16 null_char = 0;
+        output_buffer.Write(&null_char, chars_to_write * sizeof(u16), sizeof(u16));
+    }
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    rb.Push(ResultSuccess);
+}
+
 void FS_USER::GetProductInfo(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
 
@@ -1997,7 +2022,7 @@ FS_USER::FS_USER(Core::System& system)
         {0x0845, &FS_USER::GetFormatInfo, "GetFormatInfo"},
         {0x0846, nullptr, "GetLegacyRomHeader2"},
         {0x0847, nullptr, "FormatCtrCardUserSaveData"},
-        {0x0848, nullptr, "GetSdmcCtrRootPath"},
+        {0x0848, &FS_USER::GetSdmcCtrRootPath, "GetSdmcCtrRootPath"},
         {0x0849, &FS_USER::GetArchiveResource, "GetArchiveResource"},
         {0x084A, &FS_USER::ExportIntegrityVerificationSeed, "ExportIntegrityVerificationSeed"},
         {0x084B, nullptr, "ImportIntegrityVerificationSeed"},
