@@ -221,6 +221,15 @@
     <addaction name="separator"/>
     <addaction name="action_Compress_ROM_File"/>
     <addaction name="action_Decompress_ROM_File"/>
+    <addaction name="separator"/>
+    <widget class="QMenu" name="menu_Create_Shortcuts">
+     <property name="title">
+      <string>Create Shortcuts for All Games</string>
+     </property>
+     <addaction name="action_Create_Shortcuts_Desktop"/>
+     <addaction name="action_Create_Shortcuts_Applications"/>
+    </widget>
+    <addaction name="menu_Create_Shortcuts"/>
    </widget>
    <widget class="QMenu" name="menu_Help">
     <property name="title">
@@ -503,6 +512,16 @@
   <action name="action_Decompress_ROM_File">
    <property name="text">
     <string>Decompress ROM File...</string>
+   </property>
+  </action>
+  <action name="action_Create_Shortcuts_Desktop">
+   <property name="text">
+    <string>Add to Desktop</string>
+   </property>
+  </action>
+  <action name="action_Create_Shortcuts_Applications">
+   <property name="text">
+    <string>Add to Applications Menu</string>
    </property>
   </action>
   <action name="action_View_Lobby">

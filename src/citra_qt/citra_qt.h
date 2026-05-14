@@ -244,6 +244,7 @@ private slots:
     void OnGameListRemovePlayTimeData(u64 program_id);
     void OnGameListCreateShortcut(u64 program_id, const std::string& game_path,
                                   GameListShortcutTarget target);
+    void OnGameListCreateShortcutForAllGames(GameListShortcutTarget target);
     void OnGameListDumpRomFS(QString game_path, u64 program_id);
     void OnGameListOpenDirectory(const QString& directory);
     void OnGameListAddDirectory();

@@ -86,6 +86,9 @@ public:
 
     QString FindGameByProgramID(u64 program_id, int role);
 
+    /// Returns all unique games currently in the list as (program_id, path) pairs.
+    QVector<QPair<u64, QString>> GetAllGames() const;
+
     void RefreshGameDirectory();
 
     void ToggleFavorite(u64 program_id);

@@ -1214,6 +1214,17 @@ void GMainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Compress_ROM_File, &GMainWindow::OnCompressFile);
     connect_menu(ui->action_Decompress_ROM_File, &GMainWindow::OnDecompressFile);
 
+#if !defined(__APPLE__)
+    connect(ui->action_Create_Shortcuts_Desktop, &QAction::triggered, [this] {
+        OnGameListCreateShortcutForAllGames(GameListShortcutTarget::Desktop);
+    });
+    connect(ui->action_Create_Shortcuts_Applications, &QAction::triggered, [this] {
+        OnGameListCreateShortcutForAllGames(GameListShortcutTarget::Applications);
+    });
+#else
+    ui->menu_Create_Shortcuts->menuAction()->setVisible(false);
+#endif
+
     // Help
     connect_menu(ui->action_Open_Citra_Folder, &GMainWindow::OnOpenCitraFolder);
     connect_menu(ui->action_Open_Log_Folder, []() {
@@ -2185,6 +2196,130 @@ void GMainWindow::OnGameListCreateShortcut(u64 program_id, const std::string& ga
         return;
     }
     CreateShortcutMessagesGUI(this, CREATE_SHORTCUT_MSGBOX_ERROR, qt_game_title);
+}
+
+void GMainWindow::OnGameListCreateShortcutForAllGames(GameListShortcutTarget target) {
+    // Resolve emulator command (same logic as single-game shortcut)
+    std::string citra_command;
+    bool skip_tryexec = false;
+    const char* env_flatpak_id = getenv("FLATPAK_ID");
+    if (env_flatpak_id) {
+        citra_command = fmt::format("flatpak run {}", env_flatpak_id);
+        skip_tryexec = true;
+    } else {
+        const QStringList args = QApplication::arguments();
+        citra_command = args[0].toStdString();
+        if (citra_command.c_str()[0] == '.') {
+            citra_command = FileUtil::GetCurrentDir().value_or("") + DIR_SEP + citra_command;
+        }
+    }
+
+    // Resolve shortcut target directory
+    std::filesystem::path shortcut_path;
+    if (target == GameListShortcutTarget::Desktop) {
+        shortcut_path =
+            QStandardPaths::writableLocation(QStandardPaths::DesktopLocation).toStdString();
+    } else if (target == GameListShortcutTarget::Applications) {
+        shortcut_path = GetApplicationsDirectory();
+    }
+    if (!std::filesystem::exists(shortcut_path)) {
+        CreateShortcutMessagesGUI(this, CREATE_SHORTCUT_MSGBOX_ERROR, {});
+        return;
+    }
+
+#if defined(__linux__)
+    // Warn once about volatile AppImage shortcuts
+    const std::string appimage_ending =
+        std::string(Common::g_scm_rev).substr(0, 9).append(".AppImage");
+    if (citra_command.ends_with(appimage_ending) && !UISettings::values.shortcut_already_warned) {
+        if (CreateShortcutMessagesGUI(this, CREATE_SHORTCUT_MSGBOX_APPIMAGE_VOLATILE_WARNING, {})) {
+            return;
+        }
+        UISettings::values.shortcut_already_warned = true;
+    }
+#endif
+
+    // Collect all unique games from the list
+    const auto games = game_list->GetAllGames();
+    if (games.isEmpty()) {
+        QMessageBox::information(this, tr("Create Shortcuts"),
+                                 tr("No games found in the game list."));
+        return;
+    }
+
+    // Ask about fullscreen once for all games
+    const bool fullscreen =
+        CreateShortcutMessagesGUI(this, CREATE_SHORTCUT_MSGBOX_FULLSCREEN_PROMPT, {});
+
+    QProgressDialog progress(tr("Creating shortcuts..."), tr("Cancel"), 0, games.size(), this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+
+    int success_count = 0;
+    int fail_count = 0;
+
+    for (int i = 0; i < games.size(); ++i) {
+        if (progress.wasCanceled())
+            break;
+        progress.setValue(i);
+
+        const u64 program_id = games[i].first;
+        const std::string game_path = games[i].second.toStdString();
+
+        // Read title
+        const auto loader = Loader::GetLoader(game_path);
+        std::string game_title = fmt::format("{:016X}", program_id);
+        if (loader->ReadTitle(game_title) != Loader::ResultStatus::Success) {
+            game_title = fmt::format("{:016x}", program_id);
+        }
+        progress.setLabelText(
+            tr("Creating shortcut for %1...").arg(QString::fromStdString(game_title)));
+
+        // Remove illegal filename characters
+        const std::string illegal_chars = "<>:\"/\\|?*.";
+        for (auto it = game_title.rbegin(); it != game_title.rend(); ++it) {
+            if (illegal_chars.find(*it) != std::string::npos) {
+                game_title.erase(it.base() - 1);
+            }
+        }
+
+        // Write icon
+        std::vector<u8> icon_image_file;
+        loader->ReadIcon(icon_image_file);
+        const QImage icon_data = GetQPixmapFromSMDH(icon_image_file).toImage();
+        std::filesystem::path out_icon_path;
+        if (MakeShortcutIcoPath(program_id, game_title, out_icon_path)) {
+            if (!SaveIconToFile(out_icon_path, icon_data)) {
+                LOG_WARNING(Frontend, "Could not write icon for {:s}", game_path);
+            }
+        }
+
+        std::string arguments = fmt::format("\"{:s}\"", game_path);
+        if (fullscreen) {
+            arguments = "-f " + arguments;
+        }
+        const std::string comment =
+            fmt::format("Start {:s} with the Azahar Emulator", game_title);
+
+        if (CreateShortcutLink(shortcut_path, comment, out_icon_path, citra_command, arguments,
+                               "Game;Emulator;Qt;", "3ds;Nintendo;", game_title, skip_tryexec)) {
+            ++success_count;
+        } else {
+            ++fail_count;
+        }
+    }
+    progress.setValue(games.size());
+
+    if (fail_count == 0) {
+        QMessageBox::information(
+            this, tr("Create Shortcuts"),
+            tr("Successfully created %n shortcut(s).", "", success_count));
+    } else {
+        QMessageBox::warning(this, tr("Create Shortcuts"),
+                             tr("Created %1 shortcut(s). %2 could not be created.")
+                                 .arg(success_count)
+                                 .arg(fail_count));
+    }
 }
 
 void GMainWindow::OnGameListDumpRomFS(QString game_path, u64 program_id) {

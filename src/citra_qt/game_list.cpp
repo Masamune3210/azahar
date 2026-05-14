@@ -1079,6 +1079,30 @@ QStandardItemModel* GameList::GetModel() const {
     return item_model;
 }
 
+QVector<QPair<u64, QString>> GameList::GetAllGames() const {
+    QVector<QPair<u64, QString>> games;
+    QSet<QString> seen;
+
+    std::function<void(const QModelIndex&)> collect = [&](const QModelIndex& parent) {
+        for (int i = 0; i < item_model->rowCount(parent); ++i) {
+            const QModelIndex idx = item_model->index(i, 0, parent);
+            const auto type =
+                static_cast<GameListItemType>(idx.data(GameListItem::TypeRole).toInt());
+            if (type == GameListItemType::Game) {
+                const QString path = idx.data(GameListItemPath::FullPathRole).toString();
+                if (!seen.contains(path)) {
+                    seen.insert(path);
+                    games.append({idx.data(GameListItemPath::ProgramIdRole).toULongLong(), path});
+                }
+            } else {
+                collect(idx);
+            }
+        }
+    };
+    collect(QModelIndex());
+    return games;
+}
+
 void GameList::PopulateAsync(QVector<UISettings::GameDir>& game_dirs) {
     tree_view->setEnabled(false);
 
