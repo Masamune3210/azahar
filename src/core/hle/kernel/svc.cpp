@@ -827,7 +827,15 @@ private:
 Result SVC::WaitSynchronization1(Handle handle, s64 nano_seconds) {
     auto object = kernel.GetCurrentProcess()->handle_table.Get<WaitObject>(handle);
     Thread* thread = kernel.GetCurrentThreadManager().GetCurrentThread();
-    R_UNLESS(object, ResultInvalidHandle);
+    if (!object) {
+        // Null handle (0) behaves as a permanently-unavailable object on real hardware —
+        // the thread sleeps until the timeout expires and then receives ResultTimeout.
+        if (handle == 0) {
+            object = std::make_shared<NullWaitObject>(kernel);
+        } else {
+            return ResultInvalidHandle;
+        }
+    }
 
     LOG_TRACE(Kernel_SVC, "called handle=0x{:08X}({}:{}), nanoseconds={}", handle,
               object->GetTypeName(), object->GetName(), nano_seconds);
