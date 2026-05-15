@@ -540,6 +540,9 @@ private:
     AppletSlot GetAppletSlotFromId(AppletId id);
     AppletSlot GetAppletSlotFromAttributes(AppletAttributes attributes);
     AppletSlot GetAppletSlotFromPos(AppletPos pos);
+    u64 GetAppletSlotTitleId(AppletSlot slot);
+    void RecordSlotPtmPlayEvent(AppletSlot slot, u32 application_event, u32 applet_event,
+                                const char* source);
 
     /// Checks if the Application slot has already been registered and sends the parameter to it,
     /// otherwise it queues for sending when the application registers itself with APT::Enable.

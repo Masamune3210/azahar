@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
 #include <cryptopp/aes.h>
 #include <cryptopp/cmac.h>
 #include <cryptopp/modes.h>
@@ -1492,6 +1493,34 @@ void FS_USER::GetNumSeeds(Kernel::HLERequestContext& ctx) {
     rb.Push<u32>(FileSys::GetSeedCount());
 }
 
+void FS_USER::ListSeeds(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const u32 max_count = rp.Pop<u32>();
+    auto& output_buffer = rp.PopMappedBuffer();
+
+    FileSys::SeedDB db;
+    std::vector<u64_le> seed_title_ids;
+    if (db.Load()) {
+        const u32 count = std::min(max_count, static_cast<u32>(db.seeds.size()));
+        seed_title_ids.reserve(count);
+        for (u32 i = 0; i < count; ++i) {
+            seed_title_ids.push_back(db.seeds[i].title_id);
+        }
+        if (!seed_title_ids.empty()) {
+            output_buffer.Write(seed_title_ids.data(), 0,
+                                seed_title_ids.size() * sizeof(seed_title_ids[0]));
+        }
+    }
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 2);
+    rb.Push(ResultSuccess);
+    rb.Push<u32>(static_cast<u32>(seed_title_ids.size()));
+    rb.PushMappedBuffer(output_buffer);
+
+    LOG_DEBUG(Service_FS, "called, max_count={} returned={}", max_count,
+              seed_title_ids.size());
+}
+
 void FS_USER::AddSeed(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
     u64 title_id{rp.Pop<u64>()};
@@ -1556,6 +1585,28 @@ void FS_USER::GetUnknown0x80Data(Kernel::HLERequestContext& ctx) {
     rb.PushRaw(unknown_data);
 
     LOG_WARNING(Service_FS, "(STUBBED) title_id={:016X}", title_id);
+}
+
+void FS_USER::GetNumTitleTags(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
+    rb.Push(ResultSuccess);
+    rb.Push<u32>(0);
+
+    LOG_DEBUG(Service_FS, "(STUBBED) returning no title tags");
+}
+
+void FS_USER::ListTitleTags(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const u32 max_count = rp.Pop<u32>();
+    auto& output_buffer = rp.PopMappedBuffer();
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 2);
+    rb.Push(ResultSuccess);
+    rb.Push<u32>(0);
+    rb.PushMappedBuffer(output_buffer);
+
+    LOG_DEBUG(Service_FS, "(STUBBED) max_count={} returned=0", max_count);
 }
 
 void FS_USER::ObsoletedSetSaveDataSecureValue(Kernel::HLERequestContext& ctx) {
@@ -2066,8 +2117,11 @@ FS_USER::FS_USER(Core::System& system)
         {0x087B, &FS_USER::GetSeed, "GetSeed"},
         {0x087C, &FS_USER::DeleteSeed, "GetSeed"},
         {0x087D, &FS_USER::GetNumSeeds, "GetNumSeeds"},
+        {0x087E, &FS_USER::ListSeeds, "ListSeeds"},
         {0x0880, &FS_USER::SetUnknown0x80Data, "SetUnknown0x80Data"},
         {0x0881, &FS_USER::GetUnknown0x80Data, "GetUnknown0x80Data"},
+        {0x0883, &FS_USER::GetNumTitleTags, "GetNumTitleTags"},
+        {0x0884, &FS_USER::ListTitleTags, "ListTitleTags"},
         {0x0886, nullptr, "CheckUpdatedDat"},
         // clang-format on
     };

@@ -18,6 +18,7 @@
 #include "core/hle/service/apt/ns.h"
 #include "core/hle/service/cfg/cfg.h"
 #include "core/hle/service/gsp/gsp_gpu.h"
+#include "core/hle/service/ptm/ptm.h"
 #include "video_core/utils.h"
 
 SERVICE_CONSTRUCT_IMPL(Service::APT::AppletManager)
@@ -28,6 +29,48 @@ namespace Service::APT {
 static constexpr u64 button_update_interval_us = 16666;
 /// The interval at which the HLE Applet update callback will be called, 16.6ms.
 static constexpr u64 hle_applet_update_interval_us = 16666;
+static constexpr u32 play_event_application_launch = 0b0000;
+static constexpr u32 play_event_application_close = 0b0001;
+static constexpr u32 play_event_applet_launch = 0b0010;
+static constexpr u32 play_event_applet_close = 0b0011;
+static constexpr u32 play_event_application_resume = 0b0100;
+static constexpr u32 play_event_application_suspend = 0b0101;
+static constexpr u32 play_event_applet_resume = 0b0110;
+static constexpr u32 play_event_applet_suspend = 0b0111;
+
+static u64 GetTitleIdForApplet(AppletId id, u32 region_value);
+
+static bool IsPtmRecordableApplicationTitle(u64 title_id) {
+    return static_cast<u32>(title_id >> 32) == 0x00040000;
+}
+
+static bool IsPtmRecordableTitle(u64 title_id) {
+    const u32 title_id_high = static_cast<u32>(title_id >> 32);
+    return title_id_high == 0x00040000 || title_id_high == 0x00040010 ||
+           title_id_high == 0x00040030 || title_id_high == 0x00048004 ||
+           title_id_high == 0x00048005 || title_id == ~u64{0};
+}
+
+static void RecordPtmPlayEvent(Core::System& system, u64 title_id, u32 event_type,
+                               [[maybe_unused]] const char* source) {
+    if (!IsPtmRecordableTitle(title_id)) {
+        return;
+    }
+
+    auto ptm = PTM::GetModule(system);
+    if (!ptm) {
+        return;
+    }
+
+    ptm->RecordPlayEvent(title_id, event_type);
+}
+
+static void RecordHomeMenuPtmPlayEvent(Core::System& system, u32 event_type, const char* source) {
+    auto cfg = Service::CFG::GetModule(system);
+    const u64 home_menu_title_id =
+        GetTitleIdForApplet(AppletId::HomeMenu, cfg->GetRegionValue(false));
+    RecordPtmPlayEvent(system, home_menu_title_id, event_type, source);
+}
 
 struct AppletTitleData {
     // There are two possible applet ids for each applet.
@@ -244,6 +287,45 @@ AppletManager::AppletSlot AppletManager::GetAppletSlotFromPos(AppletPos pos) {
         return AppletSlot::Error;
     }
     return GetAppletSlotFromId(applet_id);
+}
+
+u64 AppletManager::GetAppletSlotTitleId(AppletSlot slot) {
+    if (slot == AppletSlot::Error) {
+        return 0;
+    }
+
+    auto slot_data = GetAppletSlot(slot);
+    if (slot_data->title_id != 0) {
+        return slot_data->title_id;
+    }
+
+    if (slot_data->applet_id == AppletId::None) {
+        return 0;
+    }
+
+    auto cfg = Service::CFG::GetModule(system);
+    return GetTitleIdForApplet(slot_data->applet_id, cfg->GetRegionValue(false));
+}
+
+void AppletManager::RecordSlotPtmPlayEvent(AppletSlot slot, u32 application_event,
+                                           u32 applet_event, const char* source) {
+    if (slot == AppletSlot::Error) {
+        return;
+    }
+
+    auto slot_data = GetAppletSlot(slot);
+    if (!slot_data->registered && slot_data->applet_id == AppletId::None) {
+        return;
+    }
+
+    const u64 title_id = GetAppletSlotTitleId(slot);
+    if (title_id == 0) {
+        return;
+    }
+
+    const u32 event_type =
+        slot == AppletSlot::Application ? application_event : applet_event;
+    RecordPtmPlayEvent(system, title_id, event_type, source);
 }
 
 void AppletManager::CancelAndSendParameter(const MessageParameter& parameter) {
@@ -676,7 +758,12 @@ Result AppletManager::FinishPreloadingLibraryApplet(AppletId applet_id) {
 
 Result AppletManager::StartLibraryApplet(AppletId applet_id, std::shared_ptr<Kernel::Object> object,
                                          const std::vector<u8>& buffer) {
+    RecordSlotPtmPlayEvent(last_library_launcher_slot, play_event_application_suspend,
+                           play_event_applet_suspend, "StartLibraryApplet");
     active_slot = AppletSlot::LibraryApplet;
+    auto cfg = Service::CFG::GetModule(system);
+    RecordPtmPlayEvent(system, GetTitleIdForApplet(applet_id, cfg->GetRegionValue(false)),
+                       play_event_applet_launch, "StartLibraryApplet");
 
     auto send_res = SendParameter({
         .sender_id = GetAppletSlotId(last_library_launcher_slot),
@@ -715,6 +802,15 @@ Result AppletManager::CloseLibraryApplet(std::shared_ptr<Kernel::Object> object,
                                          const std::vector<u8>& buffer) {
     auto slot = GetAppletSlot(AppletSlot::LibraryApplet);
     auto destination_id = GetAppletSlotId(last_library_launcher_slot);
+    const bool paused = library_applet_closing_command == SignalType::WakeupByPause;
+
+    RecordSlotPtmPlayEvent(AppletSlot::LibraryApplet,
+                           paused ? play_event_application_suspend
+                                  : play_event_application_close,
+                           paused ? play_event_applet_suspend : play_event_applet_close,
+                           "CloseLibraryApplet");
+    RecordSlotPtmPlayEvent(last_library_launcher_slot, play_event_application_resume,
+                           play_event_applet_resume, "CloseLibraryApplet");
 
     active_slot = last_library_launcher_slot;
 
@@ -726,7 +822,7 @@ Result AppletManager::CloseLibraryApplet(std::shared_ptr<Kernel::Object> object,
         .buffer = buffer,
     };
 
-    if (library_applet_closing_command != SignalType::WakeupByPause) {
+    if (!paused) {
         CancelAndSendParameter(param);
         // TODO: Terminate the running applet title
         slot->Reset();
@@ -839,6 +935,8 @@ Result AppletManager::StartSystemApplet(AppletId applet_id, std::shared_ptr<Kern
                                         const std::vector<u8>& buffer) {
     auto source_applet_id = AppletId::Application;
     if (last_system_launcher_slot != AppletSlot::Error) {
+        RecordSlotPtmPlayEvent(last_system_launcher_slot, play_event_application_suspend,
+                               play_event_applet_suspend, "StartSystemApplet");
         const auto launcher_slot_data = GetAppletSlot(last_system_launcher_slot);
         source_applet_id = launcher_slot_data->applet_id;
 
@@ -860,7 +958,8 @@ Result AppletManager::StartSystemApplet(AppletId applet_id, std::shared_ptr<Kern
     // If a system applet is not already registered, it is started by APT.
     const auto slot_id =
         applet_id == AppletId::HomeMenu ? AppletSlot::HomeMenu : AppletSlot::SystemApplet;
-    if (!GetAppletSlot(slot_id)->registered) {
+    const bool applet_was_registered = GetAppletSlot(slot_id)->registered;
+    if (!applet_was_registered) {
         bool is_setup = system.GetAppLoader().DoingInitialSetup();
         auto cfg = Service::CFG::GetModule(system);
         auto process =
@@ -874,6 +973,14 @@ Result AppletManager::StartSystemApplet(AppletId applet_id, std::shared_ptr<Kern
     }
 
     active_slot = slot_id;
+    if (applet_was_registered) {
+        RecordSlotPtmPlayEvent(slot_id, play_event_application_resume, play_event_applet_resume,
+                               "StartSystemApplet");
+    } else {
+        auto cfg = Service::CFG::GetModule(system);
+        RecordPtmPlayEvent(system, GetTitleIdForApplet(applet_id, cfg->GetRegionValue(false)),
+                           play_event_applet_launch, "StartSystemApplet");
+    }
 
     SendApplicationParameterAfterRegistration({
         .sender_id = source_applet_id,
@@ -902,8 +1009,14 @@ Result AppletManager::CloseSystemApplet(std::shared_ptr<Kernel::Object> object,
 
     auto slot = GetAppletSlot(active_slot);
     auto closed_applet_id = slot->applet_id;
+    const auto closed_slot = active_slot;
+
+    RecordSlotPtmPlayEvent(closed_slot, play_event_application_close, play_event_applet_close,
+                           "CloseSystemApplet");
 
     active_slot = last_system_launcher_slot;
+    RecordSlotPtmPlayEvent(active_slot, play_event_application_resume, play_event_applet_resume,
+                           "CloseSystemApplet");
     slot->Reset();
 
     if (ordered_to_close_sys_applet) {
@@ -988,6 +1101,9 @@ Result AppletManager::JumpToHomeMenu(std::shared_ptr<Kernel::Object> object,
 
             switch (slot_data->attributes.applet_pos) {
             case AppletPos::Application:
+                RecordPtmPlayEvent(system, slot_data->title_id, play_event_application_suspend,
+                                   "JumpToHomeMenu");
+                RecordHomeMenuPtmPlayEvent(system, play_event_applet_resume, "JumpToHomeMenu");
                 active_slot = AppletSlot::HomeMenu;
 
                 param.destination_id = AppletId::HomeMenu;
@@ -1044,6 +1160,9 @@ Result AppletManager::PrepareToLeaveHomeMenu() {
 Result AppletManager::LeaveHomeMenu(std::shared_ptr<Kernel::Object> object,
                                     const std::vector<u8>& buffer) {
     active_slot = AppletSlot::Application;
+    RecordHomeMenuPtmPlayEvent(system, play_event_applet_suspend, "LeaveHomeMenu");
+    RecordPtmPlayEvent(system, GetAppletSlot(AppletSlot::Application)->title_id,
+                       play_event_application_resume, "LeaveHomeMenu");
 
     // If no event was provided (HOME Menu passed handle=0), supply a pre-signaled event so the
     // application can safely call svcSignalEvent on the received handle without crashing.
@@ -1095,6 +1214,9 @@ Result AppletManager::OrderToCloseApplication() {
     }
 
     ordered_to_close_application = true;
+    RecordHomeMenuPtmPlayEvent(system, play_event_applet_suspend, "OrderToCloseApplication");
+    RecordPtmPlayEvent(system, GetAppletSlot(AppletSlot::Application)->title_id,
+                       play_event_application_resume, "OrderToCloseApplication");
     active_slot = AppletSlot::Application;
 
     SendParameter({
@@ -1162,7 +1284,10 @@ Result AppletManager::CloseApplication(std::shared_ptr<Kernel::Object> object,
     ordered_to_close_application = false;
     application_cancelled = false;
 
-    GetAppletSlot(AppletSlot::Application)->Reset();
+    auto application_slot = GetAppletSlot(AppletSlot::Application);
+    RecordPtmPlayEvent(system, application_slot->title_id, play_event_application_close,
+                       "CloseApplication");
+    application_slot->Reset();
 
     if (application_close_target != AppletSlot::Error) {
         // If exiting to the home menu and it is not loaded, exit to game list.
@@ -1171,6 +1296,8 @@ Result AppletManager::CloseApplication(std::shared_ptr<Kernel::Object> object,
             system.RequestShutdown();
         } else {
             active_slot = application_close_target;
+            RecordSlotPtmPlayEvent(application_close_target, play_event_application_resume,
+                                   play_event_applet_resume, "CloseApplication");
 
             CancelAndSendParameter({
                 .sender_id = AppletId::Application,
@@ -1495,14 +1622,22 @@ Result AppletManager::StartApplication(const std::vector<u8>& parameter,
     // PM::LaunchTitle. We should research more about that.
     ASSERT_MSG(app_start_parameters, "Trying to start an application without preparing it first.");
 
+    const u64 next_title_id = app_start_parameters->next_title_id;
+    if (IsPtmRecordableApplicationTitle(next_title_id) &&
+        (active_slot == AppletSlot::HomeMenu || GetAppletSlot(AppletSlot::HomeMenu)->registered)) {
+        RecordHomeMenuPtmPlayEvent(system,
+                                   play_event_applet_suspend, "StartApplication");
+    }
     active_slot = AppletSlot::Application;
 
     // Launch the title directly.
-    auto process = NS::LaunchTitle(system, app_start_parameters->next_media_type,
-                                   app_start_parameters->next_title_id);
+    auto process = NS::LaunchTitle(system, app_start_parameters->next_media_type, next_title_id);
     if (!process) {
         LOG_CRITICAL(Service_APT, "Failed to launch title during application start, exiting.");
         system.RequestShutdown();
+    } else {
+        RecordPtmPlayEvent(system, next_title_id, play_event_application_launch,
+                           "StartApplication");
     }
 
     app_start_parameters.reset();
@@ -1617,6 +1752,8 @@ void AppletManager::EnsureHomeMenuLoaded() {
     if (!process) {
         LOG_WARNING(Service_APT,
                     "The Home Menu failed to launch, application jumping will not work.");
+    } else {
+        RecordPtmPlayEvent(system, menu_title_id, play_event_applet_launch, "EnsureHomeMenuLoaded");
     }
 }
 

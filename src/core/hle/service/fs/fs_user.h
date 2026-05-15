@@ -729,9 +729,15 @@ private:
      */
     void GetNumSeeds(Kernel::HLERequestContext& ctx);
 
+    void ListSeeds(Kernel::HLERequestContext& ctx);
+
     void SetUnknown0x80Data(Kernel::HLERequestContext& ctx);
 
     void GetUnknown0x80Data(Kernel::HLERequestContext& ctx);
+
+    void GetNumTitleTags(Kernel::HLERequestContext& ctx);
+
+    void ListTitleTags(Kernel::HLERequestContext& ctx);
 
     /**
      * FS_User::SetSaveDataSecureValue service function.

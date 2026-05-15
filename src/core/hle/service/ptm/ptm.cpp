@@ -2,6 +2,10 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <vector>
 #include "common/archives.h"
 #include "common/common_paths.h"
 #include "common/file_util.h"
@@ -9,8 +13,10 @@
 #include "common/settings.h"
 #include "core/core.h"
 #include "core/file_sys/archive_extsavedata.h"
+#include "core/file_sys/archive_systemsavedata.h"
 #include "core/file_sys/errors.h"
 #include "core/file_sys/file_backend.h"
+#include "core/hle/kernel/process.h"
 #include "core/hle/kernel/shared_page.h"
 #include "core/hle/service/mcu/mcu_rtc.h"
 #include "core/hle/service/ptm/ptm.h"
@@ -27,6 +33,256 @@ namespace Service::PTM {
 
 /// Values for the default gamecoin.dat file
 static const GameCoin default_game_coin = {0x4F00, 42, 0, 0, 0, 2014, 12, 29};
+
+constexpr u32 PTM_SYSTEM_SAVE_DATA_HIGH = 0;
+constexpr u32 PTM_SYSTEM_SAVE_DATA_LOW = 0x00010022;
+constexpr u32 PLAY_HISTORY_MAX_ENTRIES = 0x11D28;
+constexpr u32 PLAY_HISTORY_FILE_SIZE = 0xD5DE8;
+constexpr u32 PLAY_HISTORY_ENTRIES_OFFSET = 0x8;
+constexpr u64 PLAY_HISTORY_SPECIAL_TITLE_ID = 0xFFFFFFFFFFFFFFFF;
+constexpr u32 PLAY_HISTORY_EVENT_MASK = 0xF;
+constexpr u32 PLAY_HISTORY_TIMESTAMP_MASK = 0x0FFFFFFF;
+constexpr u64 MILLISECONDS_BETWEEN_1900_AND_2000 = 3155673600000ULL;
+
+struct PlayHistoryHeader {
+    u32_le start_index;
+    u32_le total_entries;
+};
+static_assert(sizeof(PlayHistoryHeader) == PLAY_HISTORY_ENTRIES_OFFSET,
+              "PlayHistoryHeader size is wrong");
+
+struct PlayHistoryData {
+    u32 start_index = 0;
+    u32 total_entries = 0;
+    std::vector<PlayHistoryEntry> entries;
+};
+
+struct PlayHistoryIpcEntry {
+    u32_le title_id_high;
+    u32_le title_id_low;
+    u32_le info_timestamp;
+};
+static_assert(sizeof(PlayHistoryIpcEntry) == sizeof(PlayHistoryEntry),
+              "PlayHistoryIpcEntry size is wrong");
+
+static u32 GetPlayHistoryTimestamp(Core::System& system) {
+    const u64 system_time_ms = system.Kernel().GetSharedPageHandler().GetSystemTimeSince2000();
+    return static_cast<u32>((system_time_ms / 60000) & PLAY_HISTORY_TIMESTAMP_MASK);
+}
+
+static u32 ConvertToPlayHistoryTimestamp(u64 value) {
+    if (value > MILLISECONDS_BETWEEN_1900_AND_2000) {
+        value -= MILLISECONDS_BETWEEN_1900_AND_2000;
+    }
+
+    if (value > PLAY_HISTORY_TIMESTAMP_MASK) {
+        value /= 60000;
+    }
+
+    return static_cast<u32>(value & PLAY_HISTORY_TIMESTAMP_MASK);
+}
+
+static u32 GetPlayHistoryEntryTimestamp(const PlayHistoryEntry& entry) {
+    return static_cast<u32>(entry.info_timestamp) >> 4;
+}
+
+static bool IsKnownTitleIdHigh(u32 title_id_high) {
+    return title_id_high >= 0x00040000 && title_id_high <= 0x00048FFF;
+}
+
+static bool IsValidPlayHistoryData(const PlayHistoryData& data) {
+    return data.start_index < PLAY_HISTORY_MAX_ENTRIES &&
+           data.total_entries <= PLAY_HISTORY_MAX_ENTRIES &&
+           data.entries.size() == PLAY_HISTORY_MAX_ENTRIES;
+}
+
+static FileSys::Path GetPtmSystemSaveDataPath() {
+    return FileSys::ConstructSystemSaveDataBinaryPath(PTM_SYSTEM_SAVE_DATA_HIGH,
+                                                      PTM_SYSTEM_SAVE_DATA_LOW);
+}
+
+static std::unique_ptr<FileSys::ArchiveBackend> OpenPtmSystemSaveDataArchive(bool create) {
+    const std::string& nand_directory = FileUtil::GetUserPath(FileUtil::UserPath::NANDDir);
+    FileSys::ArchiveFactory_SystemSaveData systemsavedata_archive_factory(nand_directory);
+    const FileSys::Path archive_path = GetPtmSystemSaveDataPath();
+
+    auto initial_archive_result = systemsavedata_archive_factory.Open(archive_path, 0);
+    if (initial_archive_result.Succeeded()) {
+        return std::move(initial_archive_result).Unwrap();
+    }
+
+    if (create) {
+        const FileSys::ArchiveFormatInfo format_info{
+            .total_size = PLAY_HISTORY_FILE_SIZE,
+            .number_directories = 0,
+            .number_files = 2,
+            .duplicate_data = 0,
+        };
+        systemsavedata_archive_factory.Format(archive_path, format_info, 0, 1, 2);
+
+        auto created_archive_result = systemsavedata_archive_factory.Open(archive_path, 0);
+        if (created_archive_result.Succeeded()) {
+            return std::move(created_archive_result).Unwrap();
+        }
+    }
+
+    return nullptr;
+}
+
+static std::unique_ptr<FileSys::FileBackend> OpenPlayHistoryFile(FileSys::ArchiveBackend& archive,
+                                                                 bool create) {
+    FileSys::Path play_history_path("/PlayHistory.dat");
+    FileSys::Mode open_mode = {};
+    open_mode.read_flag.Assign(1);
+    open_mode.write_flag.Assign(1);
+
+    auto initial_play_history_result = archive.OpenFile(play_history_path, open_mode);
+    if (initial_play_history_result.Succeeded()) {
+        auto play_history = std::move(initial_play_history_result).Unwrap();
+        if (play_history->GetSize() != PLAY_HISTORY_FILE_SIZE) {
+            play_history->SetSize(PLAY_HISTORY_FILE_SIZE);
+        }
+        return play_history;
+    }
+
+    if (create) {
+        archive.CreateFile(play_history_path, PLAY_HISTORY_FILE_SIZE);
+        auto created_play_history_result = archive.OpenFile(play_history_path, open_mode);
+        if (created_play_history_result.Succeeded()) {
+            auto play_history = std::move(created_play_history_result).Unwrap();
+            if (play_history->GetSize() != PLAY_HISTORY_FILE_SIZE) {
+                play_history->SetSize(PLAY_HISTORY_FILE_SIZE);
+            }
+            return play_history;
+        }
+    }
+
+    return nullptr;
+}
+
+static void WritePlayHistoryData(const PlayHistoryData& data) {
+    auto archive = OpenPtmSystemSaveDataArchive(true);
+    if (!archive) {
+        LOG_ERROR(Service_PTM, "Could not open PTM SystemSaveData archive!");
+        return;
+    }
+
+    auto play_history = OpenPlayHistoryFile(*archive, true);
+    if (!play_history) {
+        LOG_ERROR(Service_PTM, "Could not open PlayHistory.dat!");
+        return;
+    }
+
+    PlayHistoryHeader header{
+        .start_index = data.start_index,
+        .total_entries = data.total_entries,
+    };
+    play_history->Write(0, sizeof(header), true, false, reinterpret_cast<const u8*>(&header));
+    play_history->Write(PLAY_HISTORY_ENTRIES_OFFSET, data.entries.size() * sizeof(PlayHistoryEntry),
+                        true, false, reinterpret_cast<const u8*>(data.entries.data()));
+    play_history->Close();
+}
+
+static PlayHistoryData MakeEmptyPlayHistoryData() {
+    PlayHistoryData data;
+    data.entries.resize(PLAY_HISTORY_MAX_ENTRIES);
+    for (auto& entry : data.entries) {
+        entry = PlayHistoryEntry{
+            .title_id_high = 0xFFFFFFFF,
+            .title_id_low = 0xFFFFFFFF,
+            .info_timestamp = 0xFFFFFFFF,
+        };
+    }
+    return data;
+}
+
+static PlayHistoryData ReadPlayHistoryData(bool create) {
+    auto archive = OpenPtmSystemSaveDataArchive(create);
+    if (!archive) {
+        return MakeEmptyPlayHistoryData();
+    }
+
+    auto play_history = OpenPlayHistoryFile(*archive, create);
+    if (!play_history) {
+        return MakeEmptyPlayHistoryData();
+    }
+
+    PlayHistoryData data;
+    data.entries.resize(PLAY_HISTORY_MAX_ENTRIES);
+
+    PlayHistoryHeader header{};
+    play_history->Read(0, sizeof(header), reinterpret_cast<u8*>(&header));
+    data.start_index = header.start_index;
+    data.total_entries = header.total_entries;
+    play_history->Read(PLAY_HISTORY_ENTRIES_OFFSET, data.entries.size() * sizeof(PlayHistoryEntry),
+                       reinterpret_cast<u8*>(data.entries.data()));
+    play_history->Close();
+
+    bool migrated_swapped_title_words = false;
+    const u32 entries_to_check = std::min(data.total_entries, PLAY_HISTORY_MAX_ENTRIES);
+    for (u32 i = 0; i < entries_to_check; ++i) {
+        auto& entry = data.entries[i];
+        if (!IsKnownTitleIdHigh(entry.title_id_high) &&
+            IsKnownTitleIdHigh(static_cast<u32>(entry.title_id_low))) {
+            std::swap(entry.title_id_high, entry.title_id_low);
+            migrated_swapped_title_words = true;
+        }
+    }
+
+    const bool zero_filled_empty_file =
+        data.total_entries == 0 && !data.entries.empty() && data.entries.front().title_id_high == 0 &&
+        data.entries.front().title_id_low == 0 && data.entries.front().info_timestamp == 0;
+
+    if (!IsValidPlayHistoryData(data) || zero_filled_empty_file) {
+        data = MakeEmptyPlayHistoryData();
+        if (create) {
+            WritePlayHistoryData(data);
+        }
+    } else if (migrated_swapped_title_words && create) {
+        WritePlayHistoryData(data);
+    }
+
+    return data;
+}
+
+static bool IsLikelyTitleId(u64 title_id) {
+    const u32 high = static_cast<u32>(title_id >> 32);
+    return IsKnownTitleIdHigh(high);
+}
+
+static u64 GetCurrentProcessTitleId(Core::System& system) {
+    const auto process = system.Kernel().GetCurrentProcess();
+    if (process && process->codeset) {
+        return process->codeset->program_id;
+    }
+    return 0;
+}
+
+static u64 PickNotifyPlayEventTitleId(Core::System& system, const std::array<u32, 5>& params) {
+    for (std::size_t i = 0; i + 1 < params.size(); ++i) {
+        const u64 candidate = static_cast<u64>(params[i]) | (static_cast<u64>(params[i + 1]) << 32);
+        if (candidate == PLAY_HISTORY_SPECIAL_TITLE_ID || IsLikelyTitleId(candidate)) {
+            return candidate;
+        }
+    }
+    return GetCurrentProcessTitleId(system);
+}
+
+static u32 PickNotifyPlayEventType(const std::array<u32, 5>& params) {
+    for (u32 param : params) {
+        if (param <= PLAY_HISTORY_EVENT_MASK) {
+            return param;
+        }
+    }
+    return 0;
+}
+
+void Module::Interface::RegisterAlarmClient(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    rb.Push(ResultSuccess);
+}
 
 void Module::Interface::GetAdapterState(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
@@ -96,6 +352,34 @@ void Module::Interface::GetStepHistory(Kernel::HLERequestContext& ctx) {
 
     LOG_WARNING(Service_PTM, "(STUBBED) called, from time(raw): 0x{:x}, for {} hours", start_time,
                 hours);
+}
+
+void Module::Interface::GetStepHistoryAll(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+
+    const u32 hours = rp.Pop<u32>();
+    const u32 start_time = rp.Pop<u32>();
+    auto& steps_buffer = rp.PopMappedBuffer();
+    auto& timestamps_buffer = rp.PopMappedBuffer();
+
+    if (steps_buffer.GetSize() != 0) {
+        std::vector<u8> steps(steps_buffer.GetSize());
+        steps_buffer.Write(steps.data(), 0, steps.size());
+    }
+    if (timestamps_buffer.GetSize() != 0) {
+        std::vector<u8> timestamps(timestamps_buffer.GetSize());
+        timestamps_buffer.Write(timestamps.data(), 0, timestamps.size());
+    }
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 4);
+    rb.Push(ResultSuccess);
+    rb.PushMappedBuffer(steps_buffer);
+    rb.PushMappedBuffer(timestamps_buffer);
+
+    LOG_DEBUG(Service_PTM,
+              "(STUBBED) called, from time(raw): 0x{:x}, hours={}, steps_size={}, "
+              "timestamps_size={}",
+              start_time, hours, steps_buffer.GetSize(), timestamps_buffer.GetSize());
 }
 
 void Module::Interface::GetTotalStepCount(Kernel::HLERequestContext& ctx) {
@@ -190,6 +474,119 @@ void Module::Interface::GetSystemTime(Kernel::HLERequestContext& ctx) {
     rb.Push(console_time);
 }
 
+void Module::Interface::GetPlayHistory(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const u32 entry_offset = rp.Pop<u32>();
+    const u32 total_entries = rp.Pop<u32>();
+    auto& buffer = rp.PopMappedBuffer();
+
+    const auto entries = ptm->GetPlayHistoryEntries(entry_offset, total_entries);
+    if (!entries.empty()) {
+        std::vector<PlayHistoryIpcEntry> ipc_entries;
+        ipc_entries.reserve(entries.size());
+        for (const auto& entry : entries) {
+            ipc_entries.push_back({
+                .title_id_high = entry.title_id_high,
+                .title_id_low = entry.title_id_low,
+                .info_timestamp = entry.info_timestamp,
+            });
+        }
+
+        const std::size_t bytes_to_write =
+            std::min<std::size_t>(ipc_entries.size() * sizeof(PlayHistoryIpcEntry),
+                                  buffer.GetSize());
+        buffer.Write(ipc_entries.data(), 0, bytes_to_write);
+    }
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 2);
+    rb.Push(ResultSuccess);
+    rb.Push<u32>(static_cast<u32>(entries.size()));
+    rb.PushMappedBuffer(buffer);
+
+    LOG_DEBUG(Service_PTM, "GetPlayHistory offset={} requested={} returned={} buffer_size={}",
+              entry_offset, total_entries, entries.size(), buffer.GetSize());
+}
+
+void Module::Interface::GetPlayHistoryStart(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const u32 start = ptm->GetPlayHistoryStart();
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
+    rb.Push(ResultSuccess);
+    rb.Push(start);
+
+    LOG_DEBUG(Service_PTM, "GetPlayHistoryStart returned={}", start);
+}
+
+void Module::Interface::GetPlayHistoryLength(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const u32 length = ptm->GetPlayHistoryLength();
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
+    rb.Push(ResultSuccess);
+    rb.Push(length);
+
+    LOG_DEBUG(Service_PTM, "GetPlayHistoryLength returned={}", length);
+}
+
+void Module::Interface::ClearPlayHistory(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    ptm->ClearPlayHistory();
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    rb.Push(ResultSuccess);
+
+    LOG_DEBUG(Service_PTM, "ClearPlayHistory called");
+}
+
+void Module::Interface::CalcPlayHistoryStart(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const u64 system_time = rp.Pop<u64>();
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
+    rb.Push(ResultSuccess);
+    const u32 start = ptm->CalcPlayHistoryStart(system_time);
+    rb.Push(start);
+
+    LOG_DEBUG(Service_PTM,
+              "CalcPlayHistoryStart raw_input={} normalized_timestamp_minutes={} returned={}",
+              system_time, ConvertToPlayHistoryTimestamp(system_time), start);
+}
+
+void Module::Interface::NotifyPlayEvent(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const std::array<u32, 5> params{
+        rp.Pop<u32>(), rp.Pop<u32>(), rp.Pop<u32>(), rp.Pop<u32>(), rp.Pop<u32>()};
+    const u64 title_id = PickNotifyPlayEventTitleId(ptm->system, params);
+    const u32 event_type = PickNotifyPlayEventType(params);
+
+    if (title_id != 0) {
+        ptm->NotifyPlayEvent(title_id, event_type);
+    } else {
+        LOG_DEBUG(Service_PTM,
+                  "NotifyPlayEvent ignored because no title id could be decoded, raw={:08X} "
+                  "{:08X} {:08X} {:08X} {:08X}",
+                  params[0], params[1], params[2], params[3], params[4]);
+    }
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    rb.Push(ResultSuccess);
+
+    LOG_DEBUG(Service_PTM,
+              "NotifyPlayEvent title_id={:016X} event_type={} raw={:08X} {:08X} {:08X} "
+              "{:08X} {:08X}",
+              title_id, event_type, params[0], params[1], params[2], params[3], params[4]);
+}
+
+void Module::Interface::ClearSoftwareClosedFlag(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    rb.Push(ResultSuccess);
+
+    LOG_DEBUG(Service_PTM, "(STUBBED) ClearSoftwareClosedFlag called");
+}
+
 static void WriteGameCoinData(GameCoin gamecoin_data) {
     const std::string& nand_directory = FileUtil::GetUserPath(FileUtil::UserPath::NANDDir);
     FileSys::ArchiveFactory_ExtSaveData extdata_archive_factory(nand_directory,
@@ -267,6 +664,8 @@ Module::Module(Core::System& system_) : system(system_) {
     if (archive_result.Code() == FileSys::ResultNotFormatted) {
         WriteGameCoinData(default_game_coin);
     }
+
+    ReadPlayHistoryData(true);
 }
 
 template <class Archive>
@@ -290,8 +689,98 @@ void Module::SetPlayCoins(u16 play_coins) {
     WriteGameCoinData(game_coin);
 }
 
+void Module::RecordPlayEvent(u64 title_id, u32 event_type) {
+    NotifyPlayEvent(title_id, event_type);
+}
+
+std::vector<PlayHistoryEntry> Module::GetPlayHistoryEntries(u32 offset, u32 count) const {
+    const PlayHistoryData data = ReadPlayHistoryData(true);
+    std::vector<PlayHistoryEntry> entries;
+    entries.reserve(count);
+
+    u32 visible_index = 0;
+    for (u32 i = 0; i < data.total_entries && entries.size() < count; ++i) {
+        const u32 physical_index = (data.start_index + i) % PLAY_HISTORY_MAX_ENTRIES;
+        const auto& entry = data.entries[physical_index];
+
+        if (visible_index++ < offset) {
+            continue;
+        }
+
+        entries.push_back(entry);
+    }
+    return entries;
+}
+
+u32 Module::GetPlayHistoryStart() const {
+    return ReadPlayHistoryData(true).start_index;
+}
+
+u32 Module::GetPlayHistoryLength() const {
+    const PlayHistoryData data = ReadPlayHistoryData(true);
+    return data.total_entries;
+}
+
+u32 Module::CalcPlayHistoryStart(u64 system_time) const {
+    const u32 timestamp = ConvertToPlayHistoryTimestamp(system_time);
+    const PlayHistoryData data = ReadPlayHistoryData(true);
+
+    u32 visible_index = 0;
+    for (u32 i = 0; i < data.total_entries; ++i) {
+        const u32 physical_index = (data.start_index + i) % PLAY_HISTORY_MAX_ENTRIES;
+        const auto& entry = data.entries[physical_index];
+        const u32 entry_timestamp = GetPlayHistoryEntryTimestamp(entry);
+        if (entry_timestamp >= timestamp) {
+            return visible_index;
+        }
+        ++visible_index;
+    }
+
+    return visible_index;
+}
+
+void Module::ClearPlayHistory() {
+    WritePlayHistoryData(MakeEmptyPlayHistoryData());
+}
+
+void Module::NotifyPlayEvent(u64 title_id, u32 event_type) {
+    PlayHistoryData data = ReadPlayHistoryData(true);
+    if (!IsValidPlayHistoryData(data)) {
+        data = MakeEmptyPlayHistoryData();
+    }
+
+    const u32 write_index = data.total_entries < PLAY_HISTORY_MAX_ENTRIES
+                                ? data.total_entries
+                                : data.start_index;
+    if (data.total_entries < PLAY_HISTORY_MAX_ENTRIES) {
+        ++data.total_entries;
+    } else {
+        data.start_index = (data.start_index + 1) % PLAY_HISTORY_MAX_ENTRIES;
+    }
+
+    data.entries[write_index] = PlayHistoryEntry{
+        .title_id_high = static_cast<u32>(title_id >> 32),
+        .title_id_low = static_cast<u32>(title_id),
+        .info_timestamp =
+            static_cast<u32>((GetPlayHistoryTimestamp(system) << 4) | (event_type & 0xF)),
+    };
+    WritePlayHistoryData(data);
+}
+
 Module::Interface::Interface(std::shared_ptr<Module> ptm, const char* name, u32 max_session)
     : ServiceFramework(name, max_session), ptm(std::move(ptm)) {}
+
+std::shared_ptr<Module> Module::Interface::GetModule() const {
+    return ptm;
+}
+
+std::shared_ptr<Module> GetModule(Core::System& system) {
+    auto ptm = system.ServiceManager().GetService<Module::Interface>("ptm:play");
+    if (!ptm) {
+        return nullptr;
+    }
+    return ptm->GetModule();
+}
 
 void InstallInterfaces(Core::System& system) {
     auto& service_manager = system.ServiceManager();

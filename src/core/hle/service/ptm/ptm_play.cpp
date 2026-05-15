@@ -14,7 +14,7 @@ PTM_Play::PTM_Play(std::shared_ptr<Module> ptm)
     static const FunctionInfo functions[] = {
         // ptm:u common commands
         // clang-format off
-        {0x0001, nullptr, "RegisterAlarmClient"},
+        {0x0001, &PTM_Play::RegisterAlarmClient, "RegisterAlarmClient"},
         {0x0002, nullptr, "SetRtcAlarm"},
         {0x0003, nullptr, "GetRtcAlarm"},
         {0x0004, nullptr, "CancelRtcAlarm"},
@@ -28,12 +28,12 @@ PTM_Play::PTM_Play(std::shared_ptr<Module> ptm)
         {0x000C, &PTM_Play::GetTotalStepCount, "GetTotalStepCount"},
         {0x000D, nullptr, "SetPedometerRecordingMode"},
         {0x000E, nullptr, "GetPedometerRecordingMode"},
-        {0x000F, nullptr, "GetStepHistoryAll"},
+        {0x000F, &PTM_Play::GetStepHistoryAll, "GetStepHistoryAll"},
         // ptm:play
-        {0x0807, nullptr, "GetPlayHistory"},
-        {0x0808, nullptr, "GetPlayHistoryStart"},
-        {0x0809, nullptr, "GetPlayHistoryLength"},
-        {0x080B, nullptr, "CalcPlayHistoryStart"},
+        {0x0807, &PTM_Play::GetPlayHistory, "GetPlayHistory"},
+        {0x0808, &PTM_Play::GetPlayHistoryStart, "GetPlayHistoryStart"},
+        {0x0809, &PTM_Play::GetPlayHistoryLength, "GetPlayHistoryLength"},
+        {0x080B, &PTM_Play::CalcPlayHistoryStart, "CalcPlayHistoryStart"},
         // clang-format on
     };
     RegisterHandlers(functions);

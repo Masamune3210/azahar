@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <array>
 #include <memory>
+#include <vector>
 #include "common/common_types.h"
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/service/service.h"
@@ -43,6 +45,18 @@ struct GameCoin {
     u8 day;
 };
 
+/**
+ * Represents one 0xC-byte entry in PTM SystemSaveData /PlayHistory.dat.
+ * The low nibble of info_timestamp is the event type; the high 28 bits are minutes since
+ * 2000-01-01.
+ */
+struct PlayHistoryEntry {
+    u32_le title_id_high;
+    u32_le title_id_low;
+    u32_le info_timestamp;
+};
+static_assert(sizeof(PlayHistoryEntry) == 0xC, "PlayHistoryEntry size is wrong");
+
 void CheckNew3DS(IPC::RequestBuilder& rb);
 
 class Module final {
@@ -52,10 +66,13 @@ public:
 
     static u16 GetPlayCoins();
     static void SetPlayCoins(u16 play_coins);
+    void RecordPlayEvent(u64 title_id, u32 event_type);
 
     class Interface : public ServiceFramework<Interface> {
     public:
         Interface(std::shared_ptr<Module> ptm, const char* name, u32 max_session);
+
+        std::shared_ptr<Module> GetModule() const;
 
     protected:
         /**
@@ -102,6 +119,8 @@ public:
          */
         void GetPedometerState(Kernel::HLERequestContext& ctx);
 
+        void RegisterAlarmClient(Kernel::HLERequestContext& ctx);
+
         /**
          * PTM::GetStepHistory service function
          *  Inputs:
@@ -113,6 +132,8 @@ public:
          *      1 : Result of function, 0 on success, otherwise error code
          */
         void GetStepHistory(Kernel::HLERequestContext& ctx);
+
+        void GetStepHistoryAll(Kernel::HLERequestContext& ctx);
 
         /**
          * PTM::GetTotalStepCount service function
@@ -153,6 +174,20 @@ public:
          */
         void GetSystemTime(Kernel::HLERequestContext& ctx);
 
+        void GetPlayHistory(Kernel::HLERequestContext& ctx);
+
+        void GetPlayHistoryStart(Kernel::HLERequestContext& ctx);
+
+        void GetPlayHistoryLength(Kernel::HLERequestContext& ctx);
+
+        void ClearPlayHistory(Kernel::HLERequestContext& ctx);
+
+        void CalcPlayHistoryStart(Kernel::HLERequestContext& ctx);
+
+        void NotifyPlayEvent(Kernel::HLERequestContext& ctx);
+
+        void ClearSoftwareClosedFlag(Kernel::HLERequestContext& ctx);
+
     protected:
         std::shared_ptr<Module> ptm;
     };
@@ -164,12 +199,21 @@ private:
     bool battery_is_charging = true;
     bool pedometer_is_counting = false;
 
+    std::vector<PlayHistoryEntry> GetPlayHistoryEntries(u32 offset, u32 count) const;
+    u32 GetPlayHistoryStart() const;
+    u32 GetPlayHistoryLength() const;
+    u32 CalcPlayHistoryStart(u64 system_time) const;
+    void ClearPlayHistory();
+    void NotifyPlayEvent(u64 title_id, u32 event_type);
+
     template <class Archive>
     void serialize(Archive& ar, const unsigned int);
     friend class boost::serialization::access;
 };
 
 void InstallInterfaces(Core::System& system);
+
+std::shared_ptr<Module> GetModule(Core::System& system);
 
 } // namespace Service::PTM
 
