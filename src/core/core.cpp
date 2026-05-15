@@ -692,6 +692,9 @@ void System::Shutdown(bool is_deserializing) {
 
     // Shutdown emulation session
     is_powered_on = false;
+    if (kernel) {
+        kernel->BeginShutdown();
+    }
 
     gpu.reset();
     if (!is_deserializing) {

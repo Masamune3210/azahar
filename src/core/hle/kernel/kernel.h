@@ -410,6 +410,14 @@ public:
         return pending_async_operations != 0;
     }
 
+    void BeginShutdown() {
+        shutting_down.store(true, std::memory_order_release);
+    }
+
+    bool IsShuttingDown() const {
+        return shutting_down.load(std::memory_order_acquire);
+    }
+
     void UpdateCPUAndMemoryState(u64 title_id, MemoryMode memory_mode,
                                  New3dsHwCapabilities n3ds_hw_cap);
 
@@ -431,6 +439,7 @@ private:
     std::atomic<u32> next_object_id{0};
 
     std::atomic<int> pending_async_operations{};
+    std::atomic<bool> shutting_down{false};
 
     // Note: keep the member order below in order to perform correct destruction.
     // Thread manager is destructed before process list in order to Stop threads and clear thread

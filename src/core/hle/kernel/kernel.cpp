@@ -48,6 +48,7 @@ KernelSystem::KernelSystem(Memory::MemorySystem& memory, Core::Timing& timing,
 
 /// Shutdown the kernel
 KernelSystem::~KernelSystem() {
+    BeginShutdown();
     ResetThreadIDs();
 };
 

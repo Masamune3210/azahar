@@ -259,6 +259,8 @@ public:
                                              std::shared_ptr<WakeupCallback> callback);
 
 private:
+    void WakeAfterAsync(s64 sleep_for);
+
     template <typename ResultFunctor>
     class AsyncWakeUpCallback : public WakeupCallback {
     public:
@@ -311,7 +313,7 @@ public:
                     kernel, result_function,
                     std::move(std::async(std::launch::async, [this, async_section] {
                         s64 sleep_for = async_section(*this);
-                        this->thread->WakeAfterDelay(sleep_for, true);
+                        WakeAfterAsync(sleep_for);
                     }))));
 
         } else {
@@ -351,7 +353,7 @@ public:
             // We use packaged_task so we can retrieve a std::future to pass to AsyncWakeUpCallback
             auto task = std::make_shared<std::packaged_task<void()>>([this, async_section] {
                 s64 sleep_for = async_section(*this);
-                this->thread->WakeAfterDelay(sleep_for, true);
+                WakeAfterAsync(sleep_for);
             });
 
             auto future = task->get_future();

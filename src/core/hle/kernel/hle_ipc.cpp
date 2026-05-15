@@ -135,6 +135,15 @@ HLERequestContext::HLERequestContext(KernelSystem& kernel, std::shared_ptr<Serve
 
 HLERequestContext::~HLERequestContext() = default;
 
+void HLERequestContext::WakeAfterAsync(s64 sleep_for) {
+    if (kernel.IsShuttingDown()) {
+        kernel.ReportAsyncState(false);
+        return;
+    }
+
+    thread->WakeAfterDelay(sleep_for, true);
+}
+
 std::shared_ptr<Object> HLERequestContext::GetIncomingHandle(u32 id_from_cmdbuf) const {
     ASSERT(id_from_cmdbuf < request_handles.size());
     return request_handles[id_from_cmdbuf];
