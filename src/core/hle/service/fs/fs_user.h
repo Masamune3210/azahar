@@ -397,6 +397,28 @@ private:
     void GetNandArchiveResource(Kernel::HLERequestContext& ctx);
 
     /**
+     * FS_User::GetSdmcCid service function
+     *  Inputs:
+     *      1 : Output buffer size (must be 0x10)
+     *      2 : (size << 4) | 0xC  (mapped write buffer descriptor)
+     *      3 : Output buffer pointer
+     *  Outputs:
+     *      1 : Result code
+     */
+    void GetSdmcCid(Kernel::HLERequestContext& ctx);
+
+    /**
+     * FS_User::GetNandCid service function
+     *  Inputs:
+     *      1 : Output buffer size (must be 0x10)
+     *      2 : (size << 4) | 0xC  (mapped write buffer descriptor)
+     *      3 : Output buffer pointer
+     *  Outputs:
+     *      1 : Result code
+     */
+    void GetNandCid(Kernel::HLERequestContext& ctx);
+
+    /**
      * FS_User::CreateExtSaveData service function
      *  Inputs:
      *      0 : 0x08510242

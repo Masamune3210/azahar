@@ -34,6 +34,7 @@ CFG_I::CFG_I(std::shared_ptr<Module> cfg) : Module::Interface(std::move(cfg), "c
         {0x0407, &CFG_I::SecureInfoGetByte101, "SecureInfoGetByte101"},
         {0x0408, &CFG_I::SecureInfoGetSerialNo, "SecureInfoGetSerialNo"},
         {0x0409, nullptr, "UpdateConfigBlk00040003"},
+        {0x040F, &CFG_I::ClearParentalControls, "ClearParentalControls"},
         // cfg:i
         {0x0801, &CFG_I::GetSystemConfig, "GetSystemConfig"},
         {0x0802, &CFG_I::SetSystemConfig, "SetSystemConfig"},

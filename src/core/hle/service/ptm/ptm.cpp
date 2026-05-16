@@ -456,6 +456,18 @@ void Module::Interface::IsShutdownByBatteryEmpty(Kernel::HLERequestContext& ctx)
     rb.Push(false);
 }
 
+void Module::Interface::ConfigureNew3DSCPU(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    // Bit 0: 804 MHz clock (0 = 268 MHz, 1 = 804 MHz)
+    // Bit 1: New 3DS L2 cache (0 = disabled, 1 = enabled)
+    // Azahar always runs as New 3DS; no actual clock/cache switching is needed.
+    const u32 config = rp.Pop<u32>();
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    rb.Push(ResultSuccess);
+    LOG_DEBUG(Service_PTM, "called, config={:02X}", config);
+}
+
 void Module::Interface::GetSystemTime(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
 

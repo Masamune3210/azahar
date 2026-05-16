@@ -61,7 +61,6 @@ constexpr u32_le DEFAULT_CLOCK_SEQUENCE = 0;
 constexpr const char DEFAULT_SERVER_TYPE[4] = {'L', '1', '\0', '\0'};
 constexpr u32_le DEFAULT_0x00160000_DATA = 0;
 constexpr u32_le DEFAULT_MIIVERSE_ACCESS_KEY = 0;
-constexpr std::array<u8, 0x94> DEFAULT_TWL_PARENTAL_RESTRICTIONS = {};
 
 static const std::unordered_map<ConfigBlockID, ConfigBlockDefaults> DEFAULT_CONFIG_BLOCKS = {
     {UserTimeOffsetBlockID,
@@ -73,9 +72,6 @@ static const std::unordered_map<ConfigBlockID, ConfigBlockDefaults> DEFAULT_CONF
     {BacklightControlNew3dsBlockID,
      {AccessFlag::System, &DEFAULT_NEW_3DS_BACKLIGHT_CONTROLS,
       sizeof(DEFAULT_NEW_3DS_BACKLIGHT_CONTROLS)}},
-    {TwlParentalRestrictionsBlockID,
-     {AccessFlag::System, &DEFAULT_TWL_PARENTAL_RESTRICTIONS,
-      sizeof(DEFAULT_TWL_PARENTAL_RESTRICTIONS)}},
     {SoundOutputModeBlockID,
      {AccessFlag::Global, &DEFAULT_SOUND_OUTPUT_MODE, sizeof(DEFAULT_SOUND_OUTPUT_MODE)}},
     {ConsoleUniqueID1BlockID,

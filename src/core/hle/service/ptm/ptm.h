@@ -169,6 +169,17 @@ public:
         void IsShutdownByBatteryEmpty(Kernel::HLERequestContext& ctx);
 
         /**
+         * PTM::ConfigureNew3DSCPU service function
+         *  Inputs:
+         *      1 : u32 config bitfield
+         *            bit 0 = clock rate (0 = 268 MHz, 1 = 804 MHz)
+         *            bit 1 = L2 cache  (0 = disabled, 1 = enabled)
+         *  Outputs:
+         *      1 : Result code
+         */
+        void ConfigureNew3DSCPU(Kernel::HLERequestContext& ctx);
+
+        /**
          * PTM::GetSystemTime service function
          *  Outputs:
          *      1: Result code, 0 on success, otherwise error code

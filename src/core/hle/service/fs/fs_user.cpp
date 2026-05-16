@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <array>
 #include <cryptopp/aes.h>
 #include <cryptopp/cmac.h>
 #include <cryptopp/modes.h>
@@ -968,6 +969,37 @@ void FS_USER::GetNandArchiveResource(Kernel::HLERequestContext& ctx) {
     IPC::RequestBuilder rb = rp.MakeBuilder(5, 0);
     rb.Push(ResultSuccess);
     rb.PushRaw(*resource);
+}
+
+void FS_USER::GetSdmcCid(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const u32 size = rp.Pop<u32>();
+    auto& output_buffer = rp.PopMappedBuffer();
+
+    // All-zeroes dummy SD CID.  Azahar uses all-zeroes for ID0/ID1 in the SDMC path
+    // (Nintendo 3DS/000…/000…), so returning a non-zero CID would produce a SHA-256-
+    // derived ID0 that disagrees with those paths.  All-zeroes is the honest answer
+    // for an emulated device with no real SD card.
+    static constexpr std::array<u8, 0x10> sdmc_cid = {};
+    output_buffer.Write(sdmc_cid.data(), 0, std::min<std::size_t>(size, sdmc_cid.size()));
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
+    rb.Push(ResultSuccess);
+    rb.PushMappedBuffer(output_buffer);
+}
+
+void FS_USER::GetNandCid(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const u32 size = rp.Pop<u32>();
+    auto& output_buffer = rp.PopMappedBuffer();
+
+    // All-zeroes dummy NAND CID, consistent with Azahar's all-zeroes ID0/ID1.
+    static constexpr std::array<u8, 0x10> nand_cid = {};
+    output_buffer.Write(nand_cid.data(), 0, std::min<std::size_t>(size, nand_cid.size()));
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
+    rb.Push(ResultSuccess);
+    rb.PushMappedBuffer(output_buffer);
 }
 
 void FS_USER::CreateExtSaveData(Kernel::HLERequestContext& ctx) {
@@ -2026,8 +2058,8 @@ FS_USER::FS_USER(Core::System& system)
         {0x0816, nullptr, "GetSdmcFatfsError"},
         {0x0817, &FS_USER::IsSdmcDetected, "IsSdmcDetected"},
         {0x0818, &FS_USER::IsSdmcWriteable, "IsSdmcWritable"},
-        {0x0819, nullptr, "GetSdmcCid"},
-        {0x081A, nullptr, "GetNandCid"},
+        {0x0819, &FS_USER::GetSdmcCid, "GetSdmcCid"},
+        {0x081A, &FS_USER::GetNandCid, "GetNandCid"},
         {0x081B, nullptr, "GetSdmcSpeedInfo"},
         {0x081C, nullptr, "GetNandSpeedInfo"},
         {0x081D, nullptr, "GetSdmcLog"},

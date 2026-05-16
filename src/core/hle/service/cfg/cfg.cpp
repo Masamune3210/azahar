@@ -651,6 +651,21 @@ void Module::Interface::UpdateConfigNANDSavegame(Kernel::HLERequestContext& ctx)
     rb.Push(cfg->UpdateConfigNANDSavegame());
 }
 
+void Module::Interface::ClearParentalControls(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    // Clear the parental restriction email (0x000C0002); PIN and secret answer in
+    // 0x00100001 are intentionally preserved per hardware behaviour.
+    static const std::array<u8, 0x200> empty_email{};
+    Result res = cfg->SetConfigBlock(static_cast<u32>(ParentalRestrictionEmailBlockID),
+                                     static_cast<u32>(empty_email.size()),
+                                     AccessFlag::SystemWrite, empty_email.data());
+    if (res.IsSuccess()) {
+        res = cfg->UpdateConfigNANDSavegame();
+    }
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    rb.Push(res);
+}
+
 void Module::Interface::GetLocalFriendCodeSeedData(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
     [[maybe_unused]] u32 out_size = rp.Pop<u32>();

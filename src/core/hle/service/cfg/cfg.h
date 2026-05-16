@@ -365,6 +365,7 @@ public:
          *      1 : Result of function, 0 on success, otherwise error code
          */
         void UpdateConfigNANDSavegame(Kernel::HLERequestContext& ctx);
+        void ClearParentalControls(Kernel::HLERequestContext& ctx);
 
         /**
          * CFG::GetLocalFriendCodeSeedData service function
