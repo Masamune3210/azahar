@@ -272,9 +272,7 @@ void Module::Interface::GetAdapterState(Kernel::HLERequestContext& ctx) {
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(ResultSuccess);
-    rb.Push(ptm->battery_is_charging);
-
-    LOG_DEBUG(Service_PTM, "(STUBBED) called");
+    rb.Push(true);
 }
 
 void Module::Interface::GetShellState(Kernel::HLERequestContext& ctx) {
@@ -290,9 +288,7 @@ void Module::Interface::GetBatteryLevel(Kernel::HLERequestContext& ctx) {
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(ResultSuccess);
-    rb.Push(static_cast<u32>(ChargeLevels::CompletelyFull)); // Set to a completely full battery
-
-    LOG_DEBUG(Service_PTM, "(STUBBED) called");
+    rb.Push(static_cast<u32>(ChargeLevels::CompletelyFull));
 }
 
 void Module::Interface::GetBatteryChargeState(Kernel::HLERequestContext& ctx) {
@@ -301,8 +297,6 @@ void Module::Interface::GetBatteryChargeState(Kernel::HLERequestContext& ctx) {
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(ResultSuccess);
     rb.Push(ptm->battery_is_charging);
-
-    LOG_DEBUG(Service_PTM, "(STUBBED) called");
 }
 
 void Module::Interface::GetPedometerState(Kernel::HLERequestContext& ctx) {
@@ -444,6 +438,22 @@ void Module::Interface::GetInfoLEDStatus(Kernel::HLERequestContext& ctx) {
         rb.Push(ResultUnknown);
         rb.Push(u8{});
     }
+}
+
+void Module::Interface::SetBatteryEmptyLEDPattern(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    rp.Pop<u8>();
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    rb.Push(ResultSuccess);
+}
+
+void Module::Interface::IsShutdownByBatteryEmpty(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
+    rb.Push(ResultSuccess);
+    rb.Push(false);
 }
 
 void Module::Interface::GetSystemTime(Kernel::HLERequestContext& ctx) {

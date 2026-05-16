@@ -527,6 +527,22 @@ void ArchiveManager::RegisterArchiveTypes() {
         LOG_ERROR(Service_FS, "Can't instantiate NAND RO_W archive with path {}",
                   nand_ro_w->GetPath());
 
+    auto nand_ctr = std::make_unique<FileSys::ArchiveFactory_NAND>(nand_directory,
+                                                                   FileSys::NANDArchiveType::ROOT);
+    if (nand_ctr->Initialize())
+        RegisterArchiveType(std::move(nand_ctr), ArchiveIdCode::NANDCTRFS);
+    else
+        LOG_ERROR(Service_FS, "Can't instantiate NAND CTR FS archive with path {}",
+                  nand_ctr->GetPath());
+
+    auto nand_twl = std::make_unique<FileSys::ArchiveFactory_NAND>(nand_directory,
+                                                                  FileSys::NANDArchiveType::TWL);
+    if (nand_twl->Initialize())
+        RegisterArchiveType(std::move(nand_twl), ArchiveIdCode::NANDTWLFS);
+    else
+        LOG_ERROR(Service_FS, "Can't instantiate NAND TWL FS archive with path {}",
+                  nand_twl->GetPath());
+
     // Create the NCCH archive, basically a small variation of the RomFS archive
     auto savedatacheck_factory = std::make_unique<FileSys::ArchiveFactory_NCCH>();
     RegisterArchiveType(std::move(savedatacheck_factory), ArchiveIdCode::NCCH);

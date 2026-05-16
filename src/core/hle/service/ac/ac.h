@@ -103,6 +103,14 @@ public:
          */
         void GetWifiStatus(Kernel::HLERequestContext& ctx);
 
+        void LoadNetworkSetting(Kernel::HLERequestContext& ctx);
+
+        void GetNetworkWirelessEssidSecuritySsid(Kernel::HLERequestContext& ctx);
+
+        void GetNetworkWirelessEssidSecurityMode(Kernel::HLERequestContext& ctx);
+
+        void GetNetworkWirelessEssidPassphrase(Kernel::HLERequestContext& ctx);
+
         /**
          * AC::GetInfraPriority service function
          *  Inputs:
@@ -200,6 +208,7 @@ protected:
     };
 
     ACConfig default_config{};
+    u32 selected_network_slot = 0;
 
     bool ac_connected = false;
 

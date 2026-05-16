@@ -32,6 +32,10 @@ AC_I::AC_I(std::shared_ptr<Module> ac) : Module::Interface(std::move(ac), "ac:i"
         {0x003C, nullptr, "GetAPSSIDList"},
         {0x003E, &AC_I::IsConnected, "IsConnected"},
         {0x0040, &AC_I::SetClientVersion, "SetClientVersion"},
+        {0x0401, &AC_I::LoadNetworkSetting, "LoadNetworkSetting"},
+        {0x040F, &AC_I::GetNetworkWirelessEssidSecuritySsid, "GetNetworkWirelessEssidSecuritySsid"},
+        {0x0413, &AC_I::GetNetworkWirelessEssidSecurityMode, "GetNetworkWirelessEssidSecurityMode"},
+        {0x0415, &AC_I::GetNetworkWirelessEssidPassphrase, "GetNetworkWirelessEssidPassphrase"},
         // clang-format on
     };
     RegisterHandlers(functions);

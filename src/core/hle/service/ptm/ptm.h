@@ -76,13 +76,11 @@ public:
 
     protected:
         /**
-         * It is unknown if GetAdapterState is the same as GetBatteryChargeState,
-         * it is likely to just be a duplicate function of GetBatteryChargeState
-         * that controls another part of the HW.
          * PTM::GetAdapterState service function
          *  Outputs:
          *      1 : Result of function, 0 on success, otherwise error code
-         *      2 : Output of function, 0 = not charging, 1 = charging.
+         *      2 : Output of function, 0 = external power disconnected,
+         *          1 = external power connected.
          */
         void GetAdapterState(Kernel::HLERequestContext& ctx);
 
@@ -166,6 +164,10 @@ public:
 
         void GetInfoLEDStatus(Kernel::HLERequestContext& ctx);
 
+        void SetBatteryEmptyLEDPattern(Kernel::HLERequestContext& ctx);
+
+        void IsShutdownByBatteryEmpty(Kernel::HLERequestContext& ctx);
+
         /**
          * PTM::GetSystemTime service function
          *  Outputs:
@@ -196,7 +198,7 @@ private:
     Core::System& system;
 
     bool shell_open = true;
-    bool battery_is_charging = true;
+    bool battery_is_charging = false;
     bool pedometer_is_counting = false;
 
     void EnsurePlayHistoryLoaded();

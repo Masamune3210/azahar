@@ -14,6 +14,8 @@ public:
     ~GSP_LCD() = default;
 
 private:
+    void GetVendor(Kernel::HLERequestContext& ctx);
+
     SERVICE_SERIALIZATION_SIMPLE
 };
 

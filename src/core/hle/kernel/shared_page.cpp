@@ -72,11 +72,11 @@ Handler::Handler(Core::Timing& timing, u64 override_init_time) : timing(timing) 
     // Some games wait until this value becomes 0x1, before asking running_hw
     shared_page.unknown_value = 0x1;
 
-    // Set to a completely full battery
+    // Set to a completely full battery while connected to external power.
     shared_page.battery_state.charge_level.Assign(
         static_cast<u8>(Service::PTM::ChargeLevels::CompletelyFull));
     shared_page.battery_state.is_adapter_connected.Assign(1);
-    shared_page.battery_state.is_charging.Assign(1);
+    shared_page.battery_state.is_charging.Assign(0);
 
     init_time = GetInitTime(override_init_time);
 

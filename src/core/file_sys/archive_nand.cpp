@@ -15,6 +15,7 @@
 #include "core/file_sys/errors.h"
 #include "core/file_sys/path_parser.h"
 
+SERIALIZE_EXPORT_IMPL(FileSys::VirtualFile)
 SERIALIZE_EXPORT_IMPL(FileSys::NANDArchive)
 SERIALIZE_EXPORT_IMPL(FileSys::ArchiveFactory_NAND)
 
@@ -24,9 +25,41 @@ namespace FileSys {
 // into unifying everything in a FAT-like archive, as both the SMDC and NAND archives
 // seem to behave the same way.
 
+namespace {
+
+// Virtual TWL NAND files served from memory; keyed by ASCII path as stored on the TWL partition.
+// These files reside on actual TWL NAND hardware and are never written by normal operation, so
+// Azahar serves fixed content without creating any host-filesystem files.
+struct TwlVirtualEntry {
+    const char* path;
+    const char* content;
+};
+constexpr TwlVirtualEntry TWL_VIRTUAL_FILES[] = {
+    // 3DSident reads this via Kernel_GetInitalVersion(): extracts between "cup:" and " preInstall:"
+    // then appends "-" and the value between "nup:" and " cup:". Display format is "cup-nup".
+    // Azahar has no distinct initial vs current firmware, so both report the current system version.
+    {"/sys/log/product.log", "nup:11.17.0-50U cup:11.17.0-50U preInstall:\n"},
+};
+
+} // namespace
+
 ResultVal<std::unique_ptr<FileBackend>> NANDArchive::OpenFile(const Path& path, const Mode& mode,
                                                               u32 attributes) {
     LOG_DEBUG(Service_FS, "called path={} mode={:01X}", path.DebugStr(), mode.hex);
+
+    // TWL NAND has no host-filesystem counterpart in Azahar; serve a fixed set of virtual files.
+    if (archive_type == NANDArchiveType::TWL) {
+        if (mode != Mode::ReadOnly()) {
+            return ResultInvalidOpenFlags;
+        }
+        const std::string path_str = path.AsString();
+        for (const auto& entry : TWL_VIRTUAL_FILES) {
+            if (path_str == entry.path) {
+                return std::make_unique<VirtualFile>(entry.content);
+            }
+        }
+        return ResultNotFound;
+    }
 
     if (!AllowsWrite() && mode != Mode::ReadOnly()) {
         return ResultInvalidOpenFlags;
@@ -375,6 +408,11 @@ ArchiveFactory_NAND::ArchiveFactory_NAND(const std::string& nand_directory, NAND
 }
 
 bool ArchiveFactory_NAND::Initialize() {
+    // TWL NAND is entirely virtual; no host directory is created or required.
+    if (archive_type == NANDArchiveType::TWL) {
+        return true;
+    }
+
     if (!FileUtil::CreateFullPath(GetPath())) {
         LOG_ERROR(Service_FS, "Unable to create NAND path.");
         return false;
@@ -390,6 +428,10 @@ std::string ArchiveFactory_NAND::GetPath() {
     case NANDArchiveType::RO:
     case NANDArchiveType::RO_W:
         return PathParser("/ro").BuildHostPath(nand_directory) + DIR_SEP;
+    case NANDArchiveType::ROOT:
+        return nand_directory;
+    case NANDArchiveType::TWL:
+        return PathParser("/twl").BuildHostPath(nand_directory) + DIR_SEP;
     default:
         break;
     }

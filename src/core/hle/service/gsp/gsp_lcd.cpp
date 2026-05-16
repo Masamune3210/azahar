@@ -20,11 +20,19 @@ GSP_LCD::GSP_LCD() : ServiceFramework("gsp::Lcd") {
         {0x0011, nullptr, "PowerOnBacklight"},
         {0x0012, nullptr, "PowerOffBacklight"},
         {0x0013, nullptr, "SetLedForceOff"},
-        {0x0014, nullptr, "GetVendor"},
+        {0x0014, &GSP_LCD::GetVendor, "GetVendor"},
         {0x0015, nullptr, "GetBrightness"},
         // clang-format on
     };
     RegisterHandlers(functions);
 };
+
+void GSP_LCD::GetVendor(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
+    rb.Push(ResultSuccess);
+    rb.Push<u8>(0xCC); // SHARP/TN for both screens.
+}
 
 } // namespace Service::GSP

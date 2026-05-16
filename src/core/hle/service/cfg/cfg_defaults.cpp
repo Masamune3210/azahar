@@ -22,7 +22,7 @@ constexpr u8 UNITED_STATES_COUNTRY_ID = 49;
 constexpr u8 WASHINGTON_DC_STATE_ID = 2;
 
 constexpr u64_le DEFAULT_USER_TIME_OFFSET = 0;
-constexpr BacklightControls DEFAULT_BACKLIGHT_CONTROLS{0, 2};
+constexpr BacklightControls DEFAULT_BACKLIGHT_CONTROLS{0, 5};
 /**
  * TODO(Subv): Find out what this actually is, these values fix some NaN uniforms in some games,
  * for example Nintendo Zone
@@ -32,7 +32,7 @@ constexpr std::array<float, 8> DEFAULT_STEREO_CAMERA_SETTINGS = {
     62.0f, 289.0f, 76.80000305175781f, 46.08000183105469f,
     10.0f, 5.0f,   55.58000183105469f, 21.56999969482422f,
 };
-constexpr New3dsBacklightControls DEFAULT_NEW_3DS_BACKLIGHT_CONTROLS{{0, 0, 0, 0}, 0, {0, 0, 0}};
+constexpr New3dsBacklightControls DEFAULT_NEW_3DS_BACKLIGHT_CONTROLS{{5, 5, 5, 5}, 0, {0, 0, 0}};
 constexpr u8 DEFAULT_SOUND_OUTPUT_MODE = SOUND_STEREO;
 // NOTE: These two are placeholders. They are randomly generated elsewhere, rather than using fixed
 // constants.
@@ -61,6 +61,7 @@ constexpr u32_le DEFAULT_CLOCK_SEQUENCE = 0;
 constexpr const char DEFAULT_SERVER_TYPE[4] = {'L', '1', '\0', '\0'};
 constexpr u32_le DEFAULT_0x00160000_DATA = 0;
 constexpr u32_le DEFAULT_MIIVERSE_ACCESS_KEY = 0;
+constexpr std::array<u8, 0x94> DEFAULT_TWL_PARENTAL_RESTRICTIONS = {};
 
 static const std::unordered_map<ConfigBlockID, ConfigBlockDefaults> DEFAULT_CONFIG_BLOCKS = {
     {UserTimeOffsetBlockID,
@@ -72,6 +73,9 @@ static const std::unordered_map<ConfigBlockID, ConfigBlockDefaults> DEFAULT_CONF
     {BacklightControlNew3dsBlockID,
      {AccessFlag::System, &DEFAULT_NEW_3DS_BACKLIGHT_CONTROLS,
       sizeof(DEFAULT_NEW_3DS_BACKLIGHT_CONTROLS)}},
+    {TwlParentalRestrictionsBlockID,
+     {AccessFlag::System, &DEFAULT_TWL_PARENTAL_RESTRICTIONS,
+      sizeof(DEFAULT_TWL_PARENTAL_RESTRICTIONS)}},
     {SoundOutputModeBlockID,
      {AccessFlag::Global, &DEFAULT_SOUND_OUTPUT_MODE, sizeof(DEFAULT_SOUND_OUTPUT_MODE)}},
     {ConsoleUniqueID1BlockID,

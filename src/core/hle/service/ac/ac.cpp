@@ -2,6 +2,9 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
+#include <cstring>
+#include <string_view>
 #include <vector>
 #include "common/archives.h"
 #include "common/common_types.h"
@@ -25,6 +28,20 @@ SERIALIZE_EXPORT_IMPL(Service::AC::Module)
 SERVICE_CONSTRUCT_IMPL(Service::AC::Module)
 
 namespace Service::AC {
+
+namespace {
+constexpr std::string_view DummySsid = "Azahar";
+constexpr u32 OpenSecurityMode = 0;
+
+std::vector<u8> MakeFixedStringBuffer(std::string_view value, std::size_t size) {
+    std::vector<u8> buffer(size);
+    const std::size_t copy_size = std::min(value.size(), size == 0 ? 0 : size - 1);
+    std::memcpy(buffer.data(), value.data(), copy_size);
+    return buffer;
+}
+
+} // namespace
+
 void Module::Interface::CreateDefaultConfig(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
 
@@ -125,6 +142,42 @@ void Module::Interface::GetWifiStatus(Kernel::HLERequestContext& ctx) {
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(ResultSuccess);
     rb.Push<u32>(static_cast<u32>(WifiStatus::STATUS_CONNECTED_SLOT1));
+}
+
+void Module::Interface::LoadNetworkSetting(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const u32 slot = rp.Pop<u32>();
+
+    if (slot < 3) {
+        ac->selected_network_slot = slot;
+    }
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    rb.Push(ResultSuccess);
+}
+
+void Module::Interface::GetNetworkWirelessEssidSecuritySsid(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
+    rb.Push(ResultSuccess);
+    rb.PushStaticBuffer(MakeFixedStringBuffer(DummySsid, 0x20), 0);
+}
+
+void Module::Interface::GetNetworkWirelessEssidSecurityMode(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
+    rb.Push(ResultSuccess);
+    rb.Push<u32>(OpenSecurityMode);
+}
+
+void Module::Interface::GetNetworkWirelessEssidPassphrase(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
+    rb.Push(ResultSuccess);
+    rb.PushStaticBuffer(MakeFixedStringBuffer({}, 0x40), 0);
 }
 
 void Module::Interface::GetInfraPriority(Kernel::HLERequestContext& ctx) {
@@ -241,6 +294,7 @@ void Module::serialize(Archive& ar, const unsigned int) {
     ar & connect_event;
     ar & disconnect_event;
     ar & nintendo_zone_beacon_not_found_event;
+    ar & selected_network_slot;
     // default_config is never written to
 }
 SERIALIZE_IMPL(Module)

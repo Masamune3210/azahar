@@ -4,27 +4,77 @@
 
 #pragma once
 
+#include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 #include <boost/serialization/base_object.hpp>
 #include <boost/serialization/export.hpp>
 #include <boost/serialization/string.hpp>
+#include <boost/serialization/vector.hpp>
 #include "core/file_sys/archive_backend.h"
+#include "core/file_sys/errors.h"
+#include "core/file_sys/file_backend.h"
 #include "core/hle/result.h"
 
 namespace FileSys {
+
+/// Read-only in-memory file backend — used for virtual TWL NAND files that have no host counterpart.
+class VirtualFile : public FileBackend {
+public:
+    explicit VirtualFile(std::string_view content)
+        : data(reinterpret_cast<const u8*>(content.data()),
+               reinterpret_cast<const u8*>(content.data()) + content.size()) {}
+
+    ResultVal<std::size_t> Read(u64 offset, std::size_t length, u8* buffer) const override {
+        if (offset >= data.size())
+            return std::size_t{0};
+        const std::size_t actual =
+            std::min(length, data.size() - static_cast<std::size_t>(offset));
+        std::memcpy(buffer, data.data() + offset, actual);
+        return actual;
+    }
+
+    ResultVal<std::size_t> Write(u64, std::size_t, bool, bool, const u8*) override {
+        return FileSys::ResultInvalidOpenFlags;
+    }
+
+    u64 GetSize() const override {
+        return data.size();
+    }
+    bool SetSize(u64) const override {
+        return false;
+    }
+    bool Close() override {
+        return true;
+    }
+    void Flush() const override {}
+
+private:
+    std::vector<u8> data;
+
+    VirtualFile() = default;
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int) {
+        ar& boost::serialization::base_object<FileBackend>(*this);
+        ar & data;
+    }
+    friend class boost::serialization::access;
+};
 
 enum class NANDArchiveType : u32 {
     RW,   ///< Access to Read Write (rw) directory
     RO,   ///< Access to Read Only (ro) directory
     RO_W, ///< Access to Read Only (ro) directory with write permissions
+    ROOT, ///< Access to the full NAND directory
+    TWL,  ///< Access to the TWL NAND directory
 };
 
 /// Archive backend for SDMC archive
 class NANDArchive : public ArchiveBackend {
 public:
     explicit NANDArchive(const std::string& mount_point_, NANDArchiveType archive_type)
-        : mount_point(mount_point_) {}
+        : mount_point(mount_point_), archive_type(archive_type) {}
 
     std::string GetName() const override {
         return "NANDArchive: " + mount_point;
@@ -82,6 +132,10 @@ public:
             return "NAND RO";
         case NANDArchiveType::RO_W:
             return "NAND RO W";
+        case NANDArchiveType::ROOT:
+            return "NAND CTR FS";
+        case NANDArchiveType::TWL:
+            return "NAND TWL FS";
         default:
             break;
         }
@@ -111,5 +165,6 @@ private:
 
 } // namespace FileSys
 
+BOOST_CLASS_EXPORT_KEY(FileSys::VirtualFile)
 BOOST_CLASS_EXPORT_KEY(FileSys::NANDArchive)
 BOOST_CLASS_EXPORT_KEY(FileSys::ArchiveFactory_NAND)

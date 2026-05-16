@@ -47,6 +47,8 @@ enum class ArchiveIdCode : u32 {
     NANDRO = 0x1234567E,
     NANDROW = 0x1234567F,
     NCCH = 0x2345678A,
+    NANDCTRFS = 0x567890AB,
+    NANDTWLFS = 0x567890AE,
     OtherSaveDataGeneral = 0x567890B2,
     OtherSaveDataPermitted = 0x567890B4,
 };

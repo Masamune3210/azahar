@@ -217,6 +217,9 @@ void GSP_GPU::ReadHWRegs(Kernel::HLERequestContext& ctx) {
     u32 input_size = rp.Pop<u32>();
 
     static constexpr u32 MaxReadSize = 0x80;
+    static constexpr u32 LcdTopBrightnessRegister = 0x202240;
+    static constexpr u32 LcdBottomBrightnessRegister = 0x202A40;
+    static constexpr u32 MaxBrightnessLevel = 5;
     u32 size = std::min(input_size, MaxReadSize);
 
     if ((reg_addr % 4) != 0 || reg_addr >= 0x420000) {
@@ -236,7 +239,11 @@ void GSP_GPU::ReadHWRegs(Kernel::HLERequestContext& ctx) {
 
     std::vector<u8> buffer(size);
     for (u32 word = 0; word < size / sizeof(u32); ++word) {
-        const u32 data = system.GPU().ReadReg(REGS_BEGIN + reg_addr + word * sizeof(u32));
+        const u32 current_reg = reg_addr + word * sizeof(u32);
+        const u32 data = current_reg == LcdTopBrightnessRegister ||
+                                 current_reg == LcdBottomBrightnessRegister
+                             ? MaxBrightnessLevel
+                             : system.GPU().ReadReg(REGS_BEGIN + current_reg);
         std::memcpy(buffer.data() + word * sizeof(u32), &data, sizeof(u32));
     }
 
