@@ -199,12 +199,19 @@ private:
     bool battery_is_charging = true;
     bool pedometer_is_counting = false;
 
-    std::vector<PlayHistoryEntry> GetPlayHistoryEntries(u32 offset, u32 count) const;
-    u32 GetPlayHistoryStart() const;
-    u32 GetPlayHistoryLength() const;
-    u32 CalcPlayHistoryStart(u64 system_time) const;
+    void EnsurePlayHistoryLoaded();
+    void PersistPlayHistoryData() const;
+    std::vector<PlayHistoryEntry> GetPlayHistoryEntries(u32 start_index, u32 count);
+    u32 GetPlayHistoryStart();
+    u32 GetPlayHistoryLength();
+    u32 CalcPlayHistoryStart(u32 start, s32 entries);
     void ClearPlayHistory();
     void NotifyPlayEvent(u64 title_id, u32 event_type);
+
+    std::vector<PlayHistoryEntry> play_history_entries;
+    u32 play_history_start_index = 0;
+    u32 play_history_total_entries = 0;
+    bool play_history_loaded = false;
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int);

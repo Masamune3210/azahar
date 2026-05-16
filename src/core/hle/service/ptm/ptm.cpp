@@ -3,8 +3,8 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
-#include <array>
 #include <cstring>
+#include <utility>
 #include <vector>
 #include "common/archives.h"
 #include "common/common_paths.h"
@@ -42,7 +42,6 @@ constexpr u32 PLAY_HISTORY_ENTRIES_OFFSET = 0x8;
 constexpr u64 PLAY_HISTORY_SPECIAL_TITLE_ID = 0xFFFFFFFFFFFFFFFF;
 constexpr u32 PLAY_HISTORY_EVENT_MASK = 0xF;
 constexpr u32 PLAY_HISTORY_TIMESTAMP_MASK = 0x0FFFFFFF;
-constexpr u64 MILLISECONDS_BETWEEN_1900_AND_2000 = 3155673600000ULL;
 
 struct PlayHistoryHeader {
     u32_le start_index;
@@ -70,24 +69,8 @@ static u32 GetPlayHistoryTimestamp(Core::System& system) {
     return static_cast<u32>((system_time_ms / 60000) & PLAY_HISTORY_TIMESTAMP_MASK);
 }
 
-static u32 ConvertToPlayHistoryTimestamp(u64 value) {
-    if (value > MILLISECONDS_BETWEEN_1900_AND_2000) {
-        value -= MILLISECONDS_BETWEEN_1900_AND_2000;
-    }
-
-    if (value > PLAY_HISTORY_TIMESTAMP_MASK) {
-        value /= 60000;
-    }
-
-    return static_cast<u32>(value & PLAY_HISTORY_TIMESTAMP_MASK);
-}
-
 static u32 GetPlayHistoryEntryTimestamp(const PlayHistoryEntry& entry) {
     return static_cast<u32>(entry.info_timestamp) >> 4;
-}
-
-static bool IsKnownTitleIdHigh(u32 title_id_high) {
-    return title_id_high >= 0x00040000 && title_id_high <= 0x00048FFF;
 }
 
 static bool IsValidPlayHistoryData(const PlayHistoryData& data) {
@@ -498,13 +481,17 @@ void Module::Interface::GetPlayHistory(Kernel::HLERequestContext& ctx) {
         buffer.Write(ipc_entries.data(), 0, bytes_to_write);
     }
 
+    const u32 end_index =
+        (entry_offset + static_cast<u32>(entries.size())) % PLAY_HISTORY_MAX_ENTRIES;
+
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 2);
     rb.Push(ResultSuccess);
-    rb.Push<u32>(static_cast<u32>(entries.size()));
+    rb.Push(end_index);
     rb.PushMappedBuffer(buffer);
 
-    LOG_DEBUG(Service_PTM, "GetPlayHistory offset={} requested={} returned={} buffer_size={}",
-              entry_offset, total_entries, entries.size(), buffer.GetSize());
+    LOG_DEBUG(Service_PTM,
+              "GetPlayHistory start_index={} requested={} returned={} end_index={} buffer_size={}",
+              entry_offset, total_entries, entries.size(), end_index, buffer.GetSize());
 }
 
 void Module::Interface::GetPlayHistoryStart(Kernel::HLERequestContext& ctx) {
@@ -535,22 +522,20 @@ void Module::Interface::ClearPlayHistory(Kernel::HLERequestContext& ctx) {
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(ResultSuccess);
-
-    LOG_DEBUG(Service_PTM, "ClearPlayHistory called");
 }
 
 void Module::Interface::CalcPlayHistoryStart(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
-    const u64 system_time = rp.Pop<u64>();
+    const u32 start = rp.Pop<u32>();
+    const s32 entries = rp.Pop<s32>();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(ResultSuccess);
-    const u32 start = ptm->CalcPlayHistoryStart(system_time);
-    rb.Push(start);
+    const u32 result = ptm->CalcPlayHistoryStart(start, entries);
+    rb.Push(result);
 
-    LOG_DEBUG(Service_PTM,
-              "CalcPlayHistoryStart raw_input={} normalized_timestamp_minutes={} returned={}",
-              system_time, ConvertToPlayHistoryTimestamp(system_time), start);
+    LOG_DEBUG(Service_PTM, "CalcPlayHistoryStart start={} entries={} returned={}", start, entries,
+              result);
 }
 
 void Module::Interface::NotifyPlayEvent(Kernel::HLERequestContext& ctx) {
@@ -562,11 +547,6 @@ void Module::Interface::NotifyPlayEvent(Kernel::HLERequestContext& ctx) {
 
     if (title_id != 0) {
         ptm->NotifyPlayEvent(title_id, event_type);
-    } else {
-        LOG_DEBUG(Service_PTM,
-                  "NotifyPlayEvent ignored because no title id could be decoded, raw={:08X} "
-                  "{:08X} {:08X} {:08X} {:08X}",
-                  params[0], params[1], params[2], params[3], params[4]);
     }
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
@@ -665,7 +645,7 @@ Module::Module(Core::System& system_) : system(system_) {
         WriteGameCoinData(default_game_coin);
     }
 
-    ReadPlayHistoryData(true);
+    EnsurePlayHistoryLoaded();
 }
 
 template <class Archive>
@@ -693,78 +673,101 @@ void Module::RecordPlayEvent(u64 title_id, u32 event_type) {
     NotifyPlayEvent(title_id, event_type);
 }
 
-std::vector<PlayHistoryEntry> Module::GetPlayHistoryEntries(u32 offset, u32 count) const {
-    const PlayHistoryData data = ReadPlayHistoryData(true);
+void Module::EnsurePlayHistoryLoaded() {
+    if (play_history_loaded) {
+        return;
+    }
+
+    PlayHistoryData data = ReadPlayHistoryData(true);
+    play_history_start_index = data.start_index;
+    play_history_total_entries = data.total_entries;
+    play_history_entries = std::move(data.entries);
+    play_history_loaded = true;
+}
+
+void Module::PersistPlayHistoryData() const {
+    WritePlayHistoryData({
+        .start_index = play_history_start_index,
+        .total_entries = play_history_total_entries,
+        .entries = play_history_entries,
+    });
+}
+
+std::vector<PlayHistoryEntry> Module::GetPlayHistoryEntries(u32 start_index, u32 count) {
+    EnsurePlayHistoryLoaded();
     std::vector<PlayHistoryEntry> entries;
-    entries.reserve(count);
 
-    u32 visible_index = 0;
-    for (u32 i = 0; i < data.total_entries && entries.size() < count; ++i) {
-        const u32 physical_index = (data.start_index + i) % PLAY_HISTORY_MAX_ENTRIES;
-        const auto& entry = data.entries[physical_index];
+    if (start_index >= PLAY_HISTORY_MAX_ENTRIES || play_history_total_entries == 0) {
+        return entries;
+    }
 
-        if (visible_index++ < offset) {
-            continue;
-        }
+    const u32 logical_offset =
+        (start_index + PLAY_HISTORY_MAX_ENTRIES - play_history_start_index) %
+        PLAY_HISTORY_MAX_ENTRIES;
+    if (logical_offset >= play_history_total_entries) {
+        return entries;
+    }
 
-        entries.push_back(entry);
+    const u32 entries_to_return = std::min(count, play_history_total_entries - logical_offset);
+    entries.reserve(entries_to_return);
+    for (u32 i = 0; i < entries_to_return; ++i) {
+        const u32 physical_index = (start_index + i) % PLAY_HISTORY_MAX_ENTRIES;
+        entries.push_back(play_history_entries[physical_index]);
     }
     return entries;
 }
 
-u32 Module::GetPlayHistoryStart() const {
-    return ReadPlayHistoryData(true).start_index;
+u32 Module::GetPlayHistoryStart() {
+    EnsurePlayHistoryLoaded();
+    return play_history_start_index;
 }
 
-u32 Module::GetPlayHistoryLength() const {
-    const PlayHistoryData data = ReadPlayHistoryData(true);
-    return data.total_entries;
+u32 Module::GetPlayHistoryLength() {
+    EnsurePlayHistoryLoaded();
+    return play_history_total_entries;
 }
 
-u32 Module::CalcPlayHistoryStart(u64 system_time) const {
-    const u32 timestamp = ConvertToPlayHistoryTimestamp(system_time);
-    const PlayHistoryData data = ReadPlayHistoryData(true);
-
-    u32 visible_index = 0;
-    for (u32 i = 0; i < data.total_entries; ++i) {
-        const u32 physical_index = (data.start_index + i) % PLAY_HISTORY_MAX_ENTRIES;
-        const auto& entry = data.entries[physical_index];
-        const u32 entry_timestamp = GetPlayHistoryEntryTimestamp(entry);
-        if (entry_timestamp >= timestamp) {
-            return visible_index;
-        }
-        ++visible_index;
-    }
-
-    return visible_index;
+u32 Module::CalcPlayHistoryStart(u32 start, s32 entries) {
+    const s64 result = static_cast<s64>(start) + entries;
+    const s64 wrapped = result % PLAY_HISTORY_MAX_ENTRIES;
+    return static_cast<u32>(wrapped < 0 ? wrapped + PLAY_HISTORY_MAX_ENTRIES : wrapped);
 }
 
 void Module::ClearPlayHistory() {
-    WritePlayHistoryData(MakeEmptyPlayHistoryData());
+    const PlayHistoryData data = MakeEmptyPlayHistoryData();
+    play_history_start_index = data.start_index;
+    play_history_total_entries = data.total_entries;
+    play_history_entries = data.entries;
+    play_history_loaded = true;
+    PersistPlayHistoryData();
 }
 
 void Module::NotifyPlayEvent(u64 title_id, u32 event_type) {
-    PlayHistoryData data = ReadPlayHistoryData(true);
-    if (!IsValidPlayHistoryData(data)) {
-        data = MakeEmptyPlayHistoryData();
+    EnsurePlayHistoryLoaded();
+    if (play_history_entries.size() != PLAY_HISTORY_MAX_ENTRIES) {
+        const PlayHistoryData data = MakeEmptyPlayHistoryData();
+        play_history_start_index = data.start_index;
+        play_history_total_entries = data.total_entries;
+        play_history_entries = data.entries;
     }
 
-    const u32 write_index = data.total_entries < PLAY_HISTORY_MAX_ENTRIES
-                                ? data.total_entries
-                                : data.start_index;
-    if (data.total_entries < PLAY_HISTORY_MAX_ENTRIES) {
-        ++data.total_entries;
+    const u32 write_index = play_history_total_entries < PLAY_HISTORY_MAX_ENTRIES
+                                ? (play_history_start_index + play_history_total_entries) %
+                                      PLAY_HISTORY_MAX_ENTRIES
+                                : play_history_start_index;
+    if (play_history_total_entries < PLAY_HISTORY_MAX_ENTRIES) {
+        ++play_history_total_entries;
     } else {
-        data.start_index = (data.start_index + 1) % PLAY_HISTORY_MAX_ENTRIES;
+        play_history_start_index = (play_history_start_index + 1) % PLAY_HISTORY_MAX_ENTRIES;
     }
 
-    data.entries[write_index] = PlayHistoryEntry{
+    play_history_entries[write_index] = PlayHistoryEntry{
         .title_id_high = static_cast<u32>(title_id >> 32),
         .title_id_low = static_cast<u32>(title_id),
         .info_timestamp =
             static_cast<u32>((GetPlayHistoryTimestamp(system) << 4) | (event_type & 0xF)),
     };
-    WritePlayHistoryData(data);
+    PersistPlayHistoryData();
 }
 
 Module::Interface::Interface(std::shared_ptr<Module> ptm, const char* name, u32 max_session)
