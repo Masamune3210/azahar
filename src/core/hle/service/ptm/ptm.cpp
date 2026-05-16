@@ -69,8 +69,8 @@ static u32 GetPlayHistoryTimestamp(Core::System& system) {
     return static_cast<u32>((system_time_ms / 60000) & PLAY_HISTORY_TIMESTAMP_MASK);
 }
 
-static u32 GetPlayHistoryEntryTimestamp(const PlayHistoryEntry& entry) {
-    return static_cast<u32>(entry.info_timestamp) >> 4;
+static bool IsKnownTitleIdHigh(u32 title_id_high) {
+    return title_id_high >= 0x00040000 && title_id_high <= 0x00048FFF;
 }
 
 static bool IsValidPlayHistoryData(const PlayHistoryData& data) {
