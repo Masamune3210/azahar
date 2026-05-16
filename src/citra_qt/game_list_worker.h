@@ -17,6 +17,7 @@
 #include <QString>
 #include <QVector>
 #include "citra_qt/compatibility_list.h"
+#include "citra_qt/game_list_cache.h"
 #include "common/common_types.h"
 #include "common/play_time_manager.h"
 
@@ -53,6 +54,10 @@ signals:
      */
     void DirEntryReady(GameListDir* entry_items);
     void EntryReady(QList<QStandardItem*> entry_items, GameListDir* parent_dir);
+
+    /// Emitted in parallel with EntryReady, carrying the raw data needed to rebuild this entry
+    /// from the cache without touching the ROM file again.
+    void CacheEntryReady(GameListCacheEntry cache_entry);
 
     /**
      * After the worker has traversed the game directory looking for entries, this signal is emitted

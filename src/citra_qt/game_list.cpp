@@ -30,6 +30,7 @@
 #include "citra_qt/citra_qt.h"
 #include "citra_qt/compatibility_list.h"
 #include "citra_qt/game_list.h"
+#include "citra_qt/game_list_cache.h"
 #include "citra_qt/game_list_p.h"
 #include "citra_qt/game_list_worker.h"
 #include "citra_qt/uisettings.h"
@@ -350,8 +351,8 @@ public:
 GameList::GameList(PlayTime::PlayTimeManager& play_time_manager_, GMainWindow* parent)
     : QWidget{parent}, play_time_manager{play_time_manager_} {
     watcher = new QFileSystemWatcher(this);
-    connect(watcher, &QFileSystemWatcher::directoryChanged, this, &GameList::RefreshGameDirectory,
-            Qt::UniqueConnection);
+    // The watcher is kept for CIA-install disable/re-enable plumbing but no longer drives
+    // automatic rescans.  The game list is populated from cache or on explicit user request.
 
     this->main_window = parent;
     layout = new QVBoxLayout;
@@ -412,14 +413,9 @@ void GameList::SetFilterVisible(bool visibility) {
     search_field->setVisible(visibility);
 }
 
-void GameList::SetDirectoryWatcherEnabled(bool enabled) {
-    if (enabled) {
-        connect(watcher, &QFileSystemWatcher::directoryChanged, this,
-                &GameList::RefreshGameDirectory, Qt::UniqueConnection);
-    } else {
-        disconnect(watcher, &QFileSystemWatcher::directoryChanged, this,
-                   &GameList::RefreshGameDirectory);
-    }
+void GameList::SetDirectoryWatcherEnabled([[maybe_unused]] bool enabled) {
+    // Automatic filesystem-watcher rescans have been removed; the game list now uses an
+    // explicit cache.  This function is intentionally a no-op.
 }
 
 void GameList::ClearFilter() {
@@ -477,6 +473,17 @@ bool GameList::IsEmpty() const {
 }
 
 void GameList::DonePopulating(const QStringList& watch_list) {
+    // Save accumulated cache entries from this scan, then clear them.
+    if (current_scan_dirs && !pending_cache_entries.isEmpty()) {
+        SaveGameListCache(*current_scan_dirs, pending_cache_entries);
+    }
+    pending_cache_entries.clear();
+    current_scan_dirs = nullptr;
+
+    FinalizePopulate();
+}
+
+void GameList::FinalizePopulate() {
     emit ShowList(!IsEmpty());
 
     item_model->invisibleRootItem()->appendRow(new GameListAddDir());
@@ -490,21 +497,6 @@ void GameList::DonePopulating(const QStringList& watch_list) {
         AddFavorite(id);
     }
 
-    // Clear out the old directories to watch for changes and add the new ones
-    auto watch_dirs = watcher->directories();
-    if (!watch_dirs.isEmpty()) {
-        watcher->removePaths(watch_dirs);
-    }
-    // Workaround: Add the watch paths in chunks to allow the gui to refresh
-    // This prevents the UI from stalling when a large number of watch paths are added
-    // Also artificially caps the watcher to a certain number of directories
-    constexpr qsizetype LIMIT_WATCH_DIRECTORIES = 5000;
-    constexpr int SLICE_SIZE = 25;
-    const qsizetype len = std::min(watch_list.length(), LIMIT_WATCH_DIRECTORIES);
-    for (qsizetype i = 0; i < len; i += SLICE_SIZE) {
-        watcher->addPaths(watch_list.mid(i, i + SLICE_SIZE));
-        QCoreApplication::processEvents();
-    }
     tree_view->setEnabled(true);
     const int folderCount = tree_view->model()->rowCount();
     int children_total = 0;
@@ -518,7 +510,7 @@ void GameList::DonePopulating(const QStringList& watch_list) {
     item_model->sort(tree_view->header()->sortIndicatorSection(),
                      tree_view->header()->sortIndicatorOrder());
 
-    // resize all columns except for Name to fit their contents
+    // Resize all columns except Name to fit their contents.
     for (int i = 1; i < COLUMN_COUNT; i++) {
         tree_view->resizeColumnToContents(i);
     }
@@ -1115,10 +1107,25 @@ void GameList::PopulateAsync(QVector<UISettings::GameDir>& game_dirs) {
 
     emit ShouldCancelWorker();
 
+    // Try to load from the on-disk cache first.  This avoids re-scanning all game
+    // directories on every launch.
+    QVector<GameListCacheEntry> cached_entries;
+    if (LoadGameListCache(game_dirs, cached_entries)) {
+        PopulateFromCache(game_dirs, cached_entries);
+        FinalizePopulate();
+        return;
+    }
+
+    // Cache miss (first run, dirs changed, or cache invalidated):
+    // run the full worker scan and collect entries for the new cache.
+    current_scan_dirs = &game_dirs;
+
     GameListWorker* worker = new GameListWorker(game_dirs, compatibility_list, play_time_manager);
 
     connect(worker, &GameListWorker::EntryReady, this, &GameList::AddEntry, Qt::QueuedConnection);
     connect(worker, &GameListWorker::DirEntryReady, this, &GameList::AddDirEntry,
+            Qt::QueuedConnection);
+    connect(worker, &GameListWorker::CacheEntryReady, this, &GameList::OnCacheEntryReady,
             Qt::QueuedConnection);
     connect(worker, &GameListWorker::Finished, this, &GameList::DonePopulating,
             Qt::QueuedConnection);
@@ -1129,6 +1136,87 @@ void GameList::PopulateAsync(QVector<UISettings::GameDir>& game_dirs) {
 
     QThreadPool::globalInstance()->start(worker);
     current_worker = std::move(worker);
+}
+
+void GameList::OnCacheEntryReady(GameListCacheEntry cache_entry) {
+    // Assign the dir index by counting how many directory rows are in the model so far.
+    // DirEntryReady for a dir is always enqueued before any CacheEntryReady for its children,
+    // so rowCount()-1 reliably identifies the current directory.
+    cache_entry.game_dir_index = item_model->rowCount() - 1;
+    pending_cache_entries.append(std::move(cache_entry));
+}
+
+void GameList::PopulateFromCache(QVector<UISettings::GameDir>& game_dirs,
+                                  const QVector<GameListCacheEntry>& entries) {
+    // Build and add a GameListDir for every configured game directory.
+    QVector<GameListDir*> dir_items;
+    dir_items.reserve(game_dirs.size());
+    for (UISettings::GameDir& game_dir : game_dirs) {
+        GameListDir* dir_item;
+        if (game_dir.path == QStringLiteral("INSTALLED")) {
+            dir_item = new GameListDir(game_dir, GameListItemType::InstalledDir);
+        } else if (game_dir.path == QStringLiteral("SYSTEM")) {
+            dir_item = new GameListDir(game_dir, GameListItemType::SystemDir);
+        } else {
+            dir_item = new GameListDir(game_dir);
+        }
+        AddDirEntry(dir_item);
+        dir_items.append(dir_item);
+    }
+
+    // Reconstruct each game entry from the cached data.
+    for (const GameListCacheEntry& e : entries) {
+        if (e.game_dir_index < 0 || e.game_dir_index >= dir_items.size()) {
+            continue;
+        }
+
+        // Wrap the SMDH bytes as a span so the item constructors can read them.
+        const std::span<const u8> smdh_span(
+            reinterpret_cast<const u8*>(e.smdh.constData()),
+            static_cast<std::size_t>(e.smdh.size()));
+
+        QList<QStandardItem*> items = {
+            new GameListItemPath(e.path, smdh_span, e.program_id, e.extdata_id,
+                                  e.media_type, e.is_encrypted, e.can_insert),
+            new GameListItemCompat(e.compatibility),
+            new GameListItemRegion(smdh_span),
+            new GameListItem(e.file_type),
+            new GameListItemSize(e.file_size),
+            new GameListItemPlayTime(play_time_manager.GetPlayTime(e.program_id)),
+        };
+
+        AddEntry(items, dir_items[e.game_dir_index]);
+    }
+}
+
+void GameList::ForceRescan(QVector<UISettings::GameDir>& game_dirs) {
+    InvalidateGameListCache();
+    PopulateAsync(game_dirs);
+}
+
+void GameList::RefreshPlayTimes() {
+    const int folder_count = item_model->rowCount();
+    for (int i = 0; i < folder_count; ++i) {
+        auto* folder = item_model->item(i);
+        if (!folder) {
+            continue;
+        }
+        for (int j = 0; j < folder->rowCount(); ++j) {
+            auto* name_item = folder->child(j, 0);
+            if (!name_item ||
+                static_cast<GameListItemType>(name_item->type()) != GameListItemType::Game) {
+                continue;
+            }
+            const u64 program_id =
+                name_item->data(GameListItemPath::ProgramIdRole).toULongLong();
+            auto* time_item = folder->child(j, COLUMN_PLAY_TIME);
+            if (!time_item) {
+                continue;
+            }
+            time_item->setData(play_time_manager.GetPlayTime(program_id),
+                               GameListItemPlayTime::PlayTimeRole);
+        }
+    }
 }
 
 void GameList::SaveInterfaceLayout() {

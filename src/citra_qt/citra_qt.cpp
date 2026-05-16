@@ -1227,6 +1227,7 @@ void GMainWindow::ConnectMenuEvents() {
 
     // Help
     connect_menu(ui->action_Open_Citra_Folder, &GMainWindow::OnOpenCitraFolder);
+    connect_menu(ui->action_Refresh_Game_List, &GMainWindow::OnRefreshGameList);
     connect_menu(ui->action_Open_Log_Folder, []() {
         QString path = QString::fromStdString(FileUtil::GetUserPath(FileUtil::UserPath::LogDir));
         QDesktopServices::openUrl(QUrl::fromLocalFile(path));
@@ -2644,7 +2645,8 @@ void GMainWindow::OnCIAInstallFinished() {
     progress_bar->setValue(0);
     game_list->SetDirectoryWatcherEnabled(true);
     ui->action_Install_CIA->setEnabled(true);
-    game_list->PopulateAsync(UISettings::values.game_dirs);
+    // A new title was installed; invalidate the cache so the new entry appears.
+    game_list->ForceRescan(UISettings::values.game_dirs);
 }
 
 void GMainWindow::UninstallTitles(
@@ -2782,8 +2784,8 @@ void GMainWindow::OnStopGame() {
     SetTurboEnabled(false);
 
     play_time_manager->Stop();
-    // Update game list to show new play time
-    game_list->PopulateAsync(UISettings::values.game_dirs);
+    // Only the play-time column changed; a full rescan is unnecessary.
+    game_list->RefreshPlayTimes();
 
     ShutdownGame();
     graphics_api_button->setEnabled(true);
@@ -3191,6 +3193,10 @@ void GMainWindow::OnRemoveAmiibo() {
 void GMainWindow::OnOpenCitraFolder() {
     QDesktopServices::openUrl(QUrl::fromLocalFile(
         QString::fromStdString(FileUtil::GetUserPath(FileUtil::UserPath::UserDir))));
+}
+
+void GMainWindow::OnRefreshGameList() {
+    game_list->ForceRescan(UISettings::values.game_dirs);
 }
 
 void GMainWindow::OnToggleFilterBar() {

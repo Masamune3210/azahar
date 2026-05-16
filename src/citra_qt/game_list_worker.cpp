@@ -109,20 +109,40 @@ void GameListWorker::AddFstEntriesToGameList(const std::string& dir_path, unsign
             if (it != compatibility_list.end())
                 compatibility = it->second.first;
 
+            const bool is_encrypted = res == Loader::ResultStatus::ErrorEncrypted;
+            const bool can_insert = loader->GetFileType() == Loader::FileType::CCI;
+            const QString file_type_str = QString::fromStdString(
+                Loader::GetFileTypeString(loader->GetFileType(), loader->IsFileCompressed()));
+            const quint64 file_size = FileUtil::GetSize(physical_name);
+
             emit EntryReady(
                 {
                     new GameListItemPath(QString::fromStdString(physical_name), smdh, program_id,
-                                         extdata_id, media_type,
-                                         res == Loader::ResultStatus::ErrorEncrypted,
-                                         loader->GetFileType() == Loader::FileType::CCI),
+                                         extdata_id, media_type, is_encrypted, can_insert),
                     new GameListItemCompat(compatibility),
                     new GameListItemRegion(smdh),
-                    new GameListItem(QString::fromStdString(Loader::GetFileTypeString(
-                        loader->GetFileType(), loader->IsFileCompressed()))),
-                    new GameListItemSize(FileUtil::GetSize(physical_name)),
+                    new GameListItem(file_type_str),
+                    new GameListItemSize(file_size),
                     new GameListItemPlayTime(play_time_manager.GetPlayTime(program_id)),
                 },
                 parent_dir);
+
+            {
+                GameListCacheEntry cache_entry;
+                cache_entry.path          = QString::fromStdString(physical_name);
+                cache_entry.smdh          = QByteArray(reinterpret_cast<const char*>(smdh.data()),
+                                                        static_cast<qsizetype>(smdh.size()));
+                cache_entry.program_id    = program_id;
+                cache_entry.extdata_id    = extdata_id;
+                cache_entry.media_type    = media_type;
+                cache_entry.is_encrypted  = is_encrypted;
+                cache_entry.can_insert    = can_insert;
+                cache_entry.compatibility = compatibility;
+                cache_entry.file_type     = file_type_str;
+                cache_entry.file_size     = file_size;
+                // game_dir_index is filled in by GameList when it receives this signal.
+                emit CacheEntryReady(std::move(cache_entry));
+            }
 
         } else if (is_dir && recursion > 0) {
             watch_list.append(QString::fromStdString(physical_name));

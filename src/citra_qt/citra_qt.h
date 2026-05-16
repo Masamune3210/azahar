@@ -248,6 +248,7 @@ private slots:
     void OnGameListDumpRomFS(QString game_path, u64 program_id);
     void OnGameListOpenDirectory(const QString& directory);
     void OnGameListAddDirectory();
+    void OnRefreshGameList();
     void OnGameListShowList(bool show);
     void OnGameListOpenPerGameProperties(const QString& file);
     void OnConfigurePerGame();

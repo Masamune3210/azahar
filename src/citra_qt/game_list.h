@@ -10,6 +10,7 @@
 #include <QVector>
 #include <QWidget>
 #include "citra_qt/compatibility_list.h"
+#include "citra_qt/game_list_cache.h"
 #include "common/common_types.h"
 #include "common/play_time_manager.h"
 #include "uisettings.h"
@@ -77,7 +78,17 @@ public:
     bool IsEmpty() const;
 
     void LoadCompatibilityList();
+
+    /// Populates the list, loading from cache when it is valid and up to date.
+    /// Falls back to a full directory scan if the cache is absent or the directory list changed.
     void PopulateAsync(QVector<UISettings::GameDir>& game_dirs);
+
+    /// Invalidates the cache and unconditionally runs a full directory scan.
+    void ForceRescan(QVector<UISettings::GameDir>& game_dirs);
+
+    /// Updates only the play-time column in the current list from the play-time manager.
+    /// Cheaper than a full rescan when only play times have changed (e.g. after a game stops).
+    void RefreshPlayTimes();
 
     void SaveInterfaceLayout();
     void LoadInterfaceLayout();
@@ -123,8 +134,16 @@ private slots:
 private:
     void AddDirEntry(GameListDir* entry_items);
     void AddEntry(const QList<QStandardItem*>& entry_items, GameListDir* parent);
+    void OnCacheEntryReady(GameListCacheEntry cache_entry);
     void ValidateEntry(const QModelIndex& item);
     void DonePopulating(const QStringList& watch_list);
+
+    /// Populates the list from a pre-loaded cache without spawning a worker thread.
+    void PopulateFromCache(QVector<UISettings::GameDir>& game_dirs,
+                           const QVector<GameListCacheEntry>& entries);
+
+    /// Common finalization shared by both the scan path and the cache-load path.
+    void FinalizePopulate();
 
     void PopupContextMenu(const QPoint& menu_location);
     void PopupHeaderContextMenu(const QPoint& menu_location);
@@ -152,6 +171,12 @@ private:
     friend class GameListSearchField;
 
     const PlayTime::PlayTimeManager& play_time_manager;
+
+    // Accumulates raw cache entries while a scan worker is running.
+    // Saved to disk in DonePopulating, then cleared.
+    QVector<GameListCacheEntry> pending_cache_entries;
+    // The game_dirs in use for the current scan; needed when saving the cache.
+    QVector<UISettings::GameDir>* current_scan_dirs = nullptr;
 
     std::chrono::time_point<std::chrono::steady_clock> time_last_refresh;
 };

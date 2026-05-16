@@ -88,6 +88,7 @@
     <addaction name="menu_Amiibo"/>
     <addaction name="separator"/>
     <addaction name="action_Open_Citra_Folder"/>
+    <addaction name="action_Refresh_Game_List"/>
     <addaction name="separator"/>
     <addaction name="action_Exit"/>
    </widget>
@@ -745,6 +746,14 @@
   <action name="action_Open_Citra_Folder">
    <property name="text">
     <string>Open Azahar Folder</string>
+   </property>
+  </action>
+  <action name="action_Refresh_Game_List">
+   <property name="text">
+    <string>Refresh Game List</string>
+   </property>
+   <property name="shortcut">
+    <string>F5</string>
    </property>
   </action>
   <action name="action_Configure_Current_Game">

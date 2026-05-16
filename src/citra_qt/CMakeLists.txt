@@ -135,6 +135,8 @@ add_library(citra_qt STATIC EXCLUDE_FROM_ALL
     dumping/options_dialog.ui
     game_list.cpp
     game_list.h
+    game_list_cache.cpp
+    game_list_cache.h
     game_list_p.h
     game_list_worker.cpp
     game_list_worker.h
