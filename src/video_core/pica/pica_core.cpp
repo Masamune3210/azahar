@@ -134,11 +134,6 @@ void PicaCore::ProcessCmdList(PAddr list, u32 size, bool ignore_list) {
     }
 }
 
-static bool any_byte_match(u32 a, u32 b) {
-    return ((a & 0xFF) == (b & 0xFF)) || (((a >> 8) & 0xFF) == ((b >> 8) & 0xFF)) ||
-           (((a >> 16) & 0xFF) == ((b >> 16) & 0xFF)) || (((a >> 24) & 0xFF) == ((b >> 24) & 0xFF));
-}
-
 void PicaCore::WriteInternalReg(u32 id, u32 value, u32 mask, bool& stop_requested) {
     if (id >= RegsInternal::NUM_REGS) {
         LOG_ERROR(
@@ -173,9 +168,7 @@ void PicaCore::WriteInternalReg(u32 id, u32 value, u32 mask, bool& stop_requeste
     switch (id) {
     // Trigger IRQ
     case PICA_REG_INDEX(irq_request):
-        // TODO(PabloMK7): This logic is not fully accurate, but close enough:
-        // https://problemkaputt.de/gbatek-3ds-gpu-internal-registers-finalize-interrupt-registers.htm
-        if (any_byte_match(regs.internal.reg_array[id], regs.internal.irq_compare)) [[likely]] {
+        if (regs.internal.reg_array[id] != 0) [[likely]] {
             signal_interrupt(Service::GSP::InterruptId::P3D,
                              delay_generator.CalculateAndResetDelay());
             if (regs.internal.irq_autostop) [[likely]] {
