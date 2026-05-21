@@ -298,6 +298,11 @@ void Context::MakeRequest() {
     std::vector<Context::RequestHeader> pending_headers;
     request.method = request_method_strings.at(method);
     request.path = url_info.path;
+    LOG_WARNING(Service_HTTP,
+                "[NETDBG] request start method={} url={} host={} path={} https={} raw_body={} "
+                "chunked={}",
+                request.method, url, url_info.host, request.path, url_info.is_https,
+                post_data_raw.size(), chunked_request);
 
     // Signal the headers future as soon as httplib has parsed response headers,
     // before the body is received. This lets GetResponseStatusCode and GetResponseHeader
@@ -411,14 +416,21 @@ void Context::MakeRequestNonSSL(httplib::Request& request, const URLInfo& url_in
         cancel_stop_fn = [ptr = client.get()]() { ptr->stop(); };
     }
     if (!client->send(request, response, error)) {
-        LOG_ERROR(Service_HTTP, "MakeRequestNonSSL failed: error={} ({})", error,
-                  httplib::to_string(error));
+        LOG_ERROR(Service_HTTP, "MakeRequestNonSSL failed: host={} path={} error={} ({})",
+                  url_info.host, request.path, error, httplib::to_string(error));
         try {
             response_headers_promise.set_value();
         } catch (const std::future_error&) {
         }
         state = RequestState::Completed;
     } else {
+        LOG_WARNING(Service_HTTP,
+                    "[NETDBG] request finished host={} path={} status={} body={} location={} "
+                    "content_type={} content_length={}",
+                    url_info.host, request.path, response.status, response.body.size(),
+                    response.get_header_value("Location"),
+                    response.get_header_value("Content-Type"),
+                    response.get_header_value("Content-Length"));
         state = RequestState::ReceivingBody;
     }
     stream_cv.notify_all();
@@ -482,14 +494,21 @@ void Context::MakeRequestSSL(httplib::Request& request, const URLInfo& url_info,
         cancel_stop_fn = [ptr = client.get()]() { ptr->stop(); };
     }
     if (!client->send(request, response, error)) {
-        LOG_ERROR(Service_HTTP, "MakeRequestSSL failed: error={} ({})", error,
-                  httplib::to_string(error));
+        LOG_ERROR(Service_HTTP, "MakeRequestSSL failed: host={} path={} error={} ({})",
+                  url_info.host, request.path, error, httplib::to_string(error));
         try {
             response_headers_promise.set_value();
         } catch (const std::future_error&) {
         }
         state = RequestState::Completed;
     } else {
+        LOG_WARNING(Service_HTTP,
+                    "[NETDBG] request finished host={} path={} status={} body={} location={} "
+                    "content_type={} content_length={}",
+                    url_info.host, request.path, response.status, response.body.size(),
+                    response.get_header_value("Location"),
+                    response.get_header_value("Content-Type"),
+                    response.get_header_value("Content-Length"));
         state = RequestState::ReceivingBody;
     }
     stream_cv.notify_all();
@@ -613,6 +632,11 @@ void HTTP_C::BeginRequest(Kernel::HLERequestContext& ctx) {
     }
 
     Context& http_context = GetContext(context_handle);
+    const u32 request_state = static_cast<u32>(http_context.state.load());
+    LOG_WARNING(Service_HTTP,
+                "[NETDBG] BeginRequest handle={} method={} state={} url={} post_pending={}",
+                context_handle, static_cast<u32>(http_context.method),
+                request_state, http_context.url, http_context.post_pending_request);
 
     // This should never happen in real hardware, but can happen on citra.
     if (http_context.uses_default_client_cert && !http_context.clcert_data->init) {
@@ -656,6 +680,11 @@ void HTTP_C::BeginRequestAsync(Kernel::HLERequestContext& ctx) {
     }
 
     Context& http_context = GetContext(context_handle);
+    const u32 request_state = static_cast<u32>(http_context.state.load());
+    LOG_WARNING(Service_HTTP,
+                "[NETDBG] BeginRequestAsync handle={} method={} state={} url={} post_pending={}",
+                context_handle, static_cast<u32>(http_context.method),
+                request_state, http_context.url, http_context.post_pending_request);
 
     // This should never happen in real hardware, but can happen on citra.
     if (http_context.uses_default_client_cert && !http_context.clcert_data->init) {
@@ -760,6 +789,10 @@ void HTTP_C::ReceiveDataImpl(Kernel::HLERequestContext& ctx, bool timeout) {
             IPC::RequestBuilder rb(ctx, static_cast<u16>(ctx.CommandHeader().command_id.Value()), 1,
                                    0);
             if (async_data->async_res != ResultSuccess) {
+                LOG_WARNING(Service_HTTP,
+                            "[NETDBG] ReceiveData handle={} requested={} async_result={:08X}",
+                            async_data->context_handle, async_data->buffer_size,
+                            async_data->async_res.raw);
                 rb.Push(async_data->async_res);
                 return;
             }
@@ -783,8 +816,20 @@ void HTTP_C::ReceiveDataImpl(Kernel::HLERequestContext& ctx, bool timeout) {
 
             if (download_complete && to_copy == available) {
                 http_context.state = RequestState::Completed;
+                LOG_WARNING(Service_HTTP,
+                            "[NETDBG] ReceiveData handle={} requested={} copied={} available={} "
+                            "body={} complete={} status={} result=success",
+                            async_data->context_handle, async_data->buffer_size, to_copy,
+                            available, http_context.response.body.size(), download_complete,
+                            http_context.response.status);
                 rb.Push(ResultSuccess);
             } else {
+                LOG_WARNING(Service_HTTP,
+                            "[NETDBG] ReceiveData handle={} requested={} copied={} available={} "
+                            "body={} complete={} status={} result=buffer-small",
+                            async_data->context_handle, async_data->buffer_size, to_copy,
+                            available, http_context.response.body.size(), download_complete,
+                            http_context.response.status);
                 rb.Push(ErrorBufferSmall);
             }
         });
@@ -848,6 +893,8 @@ void HTTP_C::CreateContext(Kernel::HLERequestContext& ctx) {
     }
 
     contexts.try_emplace(++context_counter);
+    LOG_WARNING(Service_HTTP, "[NETDBG] CreateContext handle={} url_size={} method={} url={}",
+                context_counter, url_size, static_cast<u32>(method), url);
     contexts[context_counter].url = std::move(url);
     contexts[context_counter].method = method;
     contexts[context_counter].state = RequestState::NotStarted;
@@ -932,6 +979,8 @@ void HTTP_C::GetRequestState(Kernel::HLERequestContext& ctx) {
     LOG_DEBUG(Service_HTTP, "called, context_handle={}", context_handle);
 
     Context& http_context = GetContext(context_handle);
+    LOG_WARNING(Service_HTTP, "[NETDBG] GetRequestState handle={} state={}", context_handle,
+                static_cast<u32>(http_context.state.load()));
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(ResultSuccess);
@@ -1568,6 +1617,12 @@ void HTTP_C::GetResponseDataImpl(Kernel::HLERequestContext& ctx, bool timeout) {
 
             size_t write_size = std::min(out.size(), async_data->data_buffer->GetSize());
             async_data->data_buffer->Write(out.data(), 0, write_size);
+            LOG_WARNING(Service_HTTP,
+                        "[NETDBG] GetResponseData handle={} max={} wrote={} status={} body={} "
+                        "headers={}",
+                        async_data->context_handle, async_data->data_max_len, write_size,
+                        http_context.response.status, http_context.response.body.size(),
+                        headers.size());
 
             rb.Push(ResultSuccess);
             rb.Push(static_cast<u32>(write_size));
@@ -1661,12 +1716,19 @@ void HTTP_C::GetResponseHeaderImpl(Kernel::HLERequestContext& ctx, bool timeout)
             if (header != headers.end()) {
                 std::string header_value = header->second;
                 copied_size = static_cast<u32>(header_value.size());
+                LOG_WARNING(Service_HTTP,
+                            "[NETDBG] GetResponseHeader handle={} name={} found=true value={} "
+                            "copied={}",
+                            async_data->context_handle, header_name_str, header_value,
+                            copied_size);
                 if (header_value.size() >= async_data->value_buffer->GetSize()) {
                     header_value.resize(async_data->value_buffer->GetSize() - 1);
                 }
                 header_value.push_back('\0');
                 async_data->value_buffer->Write(header_value.data(), 0, header_value.size());
             } else {
+                LOG_WARNING(Service_HTTP, "[NETDBG] GetResponseHeader handle={} name={} found=false",
+                            async_data->context_handle, header_name_str);
                 LOG_DEBUG(Service_HTTP, "header={} not found", header_name_str);
                 rb.Push(ErrorHeaderNotFound);
                 rb.Push(0);
@@ -1743,6 +1805,9 @@ void HTTP_C::GetResponseStatusCodeImpl(Kernel::HLERequestContext& ctx, bool time
             // If headers were never received (send failed before response_handler fired),
             // status will still be -1; treat that as a connection error.
             if (http_context.response.status < 0) {
+                LOG_WARNING(Service_HTTP,
+                            "[NETDBG] GetResponseStatusCode handle={} status={} result=state-error",
+                            async_data->context_handle, http_context.response.status);
                 IPC::RequestBuilder rb(
                     ctx, static_cast<u16>(ctx.CommandHeader().command_id.Value()), 1, 0);
                 rb.Push(ErrorStateError);
@@ -1750,7 +1815,10 @@ void HTTP_C::GetResponseStatusCodeImpl(Kernel::HLERequestContext& ctx, bool time
             }
 
             const u32 response_code = http_context.response.status;
-            LOG_DEBUG(Service_HTTP, "Status code: {}, response_code={}", "good", response_code);
+            LOG_WARNING(Service_HTTP,
+                        "[NETDBG] GetResponseStatusCode handle={} status={} body={} result=success",
+                        async_data->context_handle, response_code,
+                        http_context.response.body.size());
 
             IPC::RequestBuilder rb(ctx, static_cast<u16>(ctx.CommandHeader().command_id.Value()), 2,
                                    0);
@@ -2116,6 +2184,11 @@ void HTTP_C::GetDownloadSizeState(Kernel::HLERequestContext& ctx) {
 
     LOG_DEBUG(Service_HTTP, "current={}, total={}", http_context.current_copied_data,
               content_length);
+    LOG_WARNING(Service_HTTP,
+                "[NETDBG] GetDownloadSizeState handle={} current={} total={} headers_ready={} "
+                "body={} status={}",
+                context_handle, http_context.current_copied_data, content_length, headers_ready,
+                http_context.response.body.size(), http_context.response.status);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(3, 0);
     rb.Push(ResultSuccess);
