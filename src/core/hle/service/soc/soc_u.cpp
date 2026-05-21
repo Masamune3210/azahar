@@ -1182,6 +1182,8 @@ void SOC_U::SendToOther(Kernel::HLERequestContext& ctx) {
 
     if (ret == SOCKET_ERROR_VALUE) {
         ret = TranslateError(send_error);
+    } else {
+        Core::System::GetInstance().ReportNetworkTraffic(0, static_cast<u64>(ret));
     }
 
     LOG_SEND_RECV(Service_SOC, "called, fd={}, ret={}", socket_handle, static_cast<s32>(ret));
@@ -1231,8 +1233,11 @@ s32 SOC_U::SendToImpl(SocketHolder& holder, u32 len, u32 flags, u32 addr_len,
     }
 #endif
 
-    if (ret == SOCKET_ERROR_VALUE)
+    if (ret == SOCKET_ERROR_VALUE) {
         ret = TranslateError(send_error);
+    } else {
+        Core::System::GetInstance().ReportNetworkTraffic(0, static_cast<u64>(ret));
+    }
 
     return ret;
 }
@@ -1380,6 +1385,8 @@ void SOC_U::RecvFromOther(Kernel::HLERequestContext& ctx) {
                 async_data->ret = TranslateError(async_data->recv_error);
             } else {
                 async_data->buffer->Write(async_data->output_buff.data(), 0, async_data->ret);
+                Core::System::GetInstance().ReportNetworkTraffic(
+                    static_cast<u64>(async_data->ret), 0);
             }
 #ifdef _WIN32
             if (async_data->dont_wait && async_data->was_blocking) {
@@ -1505,6 +1512,9 @@ void SOC_U::RecvFrom(Kernel::HLERequestContext& ctx) {
             if (async_data->ret == SOCKET_ERROR_VALUE) {
                 async_data->ret = TranslateError(async_data->recv_error);
                 total_received = 0;
+            } else {
+                Core::System::GetInstance().ReportNetworkTraffic(
+                    static_cast<u64>(async_data->ret), 0);
             }
 
             // Write only the data we received to avoid overwriting parts of the buffer with zeros

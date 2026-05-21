@@ -164,6 +164,9 @@ PerfStats::Results PerfStats::GetAndResetStats(microseconds current_system_time_
                       : 0;
     last_stats.emulation_speed = system_us_per_second.count() / 1'000'000.0;
     last_stats.artic_transmitted = static_cast<double>(artic_transmitted) / interval;
+    last_stats.network_received = static_cast<double>(network_received.exchange(0)) / interval;
+    last_stats.network_transmitted =
+        static_cast<double>(network_transmitted.exchange(0)) / interval;
     last_stats.artic_events.raw = artic_events.raw | prev_artic_event.raw;
 
     // Reset counters

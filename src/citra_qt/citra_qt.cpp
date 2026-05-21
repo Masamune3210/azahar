@@ -598,6 +598,8 @@ void GMainWindow::InitializeWidgets() {
     artic_traffic_label = new QLabel();
     artic_traffic_label->setToolTip(
         tr("Current Artic traffic speed. Higher values indicate bigger transfer loads."));
+    network_traffic_label = new QLabel();
+    network_traffic_label->setToolTip(tr("Current HLE network traffic speed."));
 
     emu_speed_label = new QLabel();
     emu_speed_label->setToolTip(tr("Current emulation speed. Values higher or lower than 100% "
@@ -610,8 +612,8 @@ void GMainWindow::InitializeWidgets() {
         tr("Time taken to emulate a 3DS frame, not counting framelimiting or v-sync. For "
            "full-speed emulation this should be at most 16.67 ms."));
 
-    for (auto& label : {loading_shaders_label, artic_traffic_label, emu_speed_label, game_fps_label,
-                        emu_frametime_label}) {
+    for (auto& label : {loading_shaders_label, artic_traffic_label, network_traffic_label,
+                        emu_speed_label, game_fps_label, emu_frametime_label}) {
         label->setVisible(false);
         label->setFrameStyle(QFrame::NoFrame);
         label->setContentsMargins(4, 0, 4, 0);
@@ -3773,6 +3775,17 @@ void GMainWindow::UpdateStatusBar() {
                                      .arg(Settings::GetFrameLimit()));
     }
     game_fps_label->setText(tr("App: %1 FPS").arg(results.game_fps, 0, 'f', 0));
+
+    const auto format_network_rate = [](double bytes_per_second) {
+        if (bytes_per_second >= 1000.0 * 1000.0) {
+            return tr("%1 MB/s").arg(bytes_per_second / (1000.0 * 1000.0), 0, 'f', 1);
+        }
+        return tr("%1 KB/s").arg(bytes_per_second / 1000.0, 0, 'f', 0);
+    };
+    network_traffic_label->setText(tr("Net: In %1 Out %2")
+                                       .arg(format_network_rate(results.network_received))
+                                       .arg(format_network_rate(results.network_transmitted)));
+
     if (UISettings::values.show_advanced_frametime_info) {
         emu_frametime_label->setText(
             tr("Frame: %1 ms (GPU: [CMD: %2 ms, SWP: %3 ms], IPC: %4 ms, SVC: %5 ms, Rem: %6 ms)")
@@ -3790,6 +3803,7 @@ void GMainWindow::UpdateStatusBar() {
     if (show_artic_label) {
         artic_traffic_label->setVisible(true);
     }
+    network_traffic_label->setVisible(true);
     emu_speed_label->setVisible(true);
     game_fps_label->setVisible(true);
     emu_frametime_label->setVisible(true);
@@ -4408,6 +4422,7 @@ void GMainWindow::RetranslateStatusBar() {
 
     emu_speed_label->setToolTip(tr("Current emulation speed. Values higher or lower than 100% "
                                    "indicate emulation is running faster or slower than a 3DS."));
+    network_traffic_label->setToolTip(tr("Current HLE network traffic speed."));
     game_fps_label->setToolTip(tr("How many frames per second the app is currently displaying. "
                                   "This will vary from app to app and scene to scene."));
     emu_frametime_label->setToolTip(

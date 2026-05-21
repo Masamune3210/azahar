@@ -184,6 +184,12 @@ public:
         }
     }
 
+    void ReportNetworkTraffic(u64 received, u64 transmitted) {
+        if (perf_stats) {
+            perf_stats->AddNetworkTraffic(received, transmitted);
+        }
+    }
+
     void ReportPerfArticEvent(PerfStats::PerfArticEventBits event, bool set) {
         if (perf_stats) {
             perf_stats->ReportPerfArticEvent(event, set);

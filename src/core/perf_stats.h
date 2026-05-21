@@ -71,6 +71,10 @@ public:
         double emulation_speed;
         /// Artic base bytes per second
         double artic_transmitted = 0;
+        /// HLE network bytes received per second
+        double network_received = 0;
+        /// HLE network bytes transmitted per second
+        double network_transmitted = 0;
         /// Artic base events
         PerfArticEvents artic_events{};
     };
@@ -112,6 +116,11 @@ public:
         artic_transmitted += bytes;
     }
 
+    void AddNetworkTraffic(u64 received, u64 transmitted) {
+        network_received.fetch_add(received);
+        network_transmitted.fetch_add(transmitted);
+    }
+
     void ReportPerfArticEvent(PerfArticEventBits event, bool set) {
         if (set) {
             artic_events.Set(event, set);
@@ -145,6 +154,10 @@ private:
     u32 game_frames = 0;
     /// Cumulative number of transmitted artic base traffic
     std::atomic<u32> artic_transmitted = 0;
+    /// Cumulative number of received HLE network bytes
+    std::atomic<u64> network_received = 0;
+    /// Cumulative number of transmitted HLE network bytes
+    std::atomic<u64> network_transmitted = 0;
     // System events that affect performance
     PerfArticEvents artic_events;
 

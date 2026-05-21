@@ -316,6 +316,7 @@ void Context::MakeRequest() {
             std::lock_guard<std::mutex> lock(stream_mutex);
             response.body.append(data, data_length);
         }
+        Core::System::GetInstance().ReportNetworkTraffic(data_length, 0);
         stream_cv.notify_all();
         return true;
     };
@@ -503,6 +504,7 @@ bool Context::ContentProvider(size_t offset, size_t length, httplib::DataSink& s
 
     if (!post_data_raw.empty()) {
         sink.write(post_data_raw.data() + offset, length);
+        Core::System::GetInstance().ReportNetworkTraffic(0, length);
     }
 
     // This state is set after sending the request, even if it hasn't received a response yet
