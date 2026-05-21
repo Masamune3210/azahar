@@ -123,6 +123,16 @@ public:
         void GetInfraPriority(Kernel::HLERequestContext& ctx);
 
         /**
+         * AC::GetConnectingLocation service function
+         *  Inputs:
+         *      1 : ProcessId Header
+         *  Outputs:
+         *      1 : Result of function, 0 on success, otherwise error code
+         *      2 : Connecting location
+         */
+        void GetConnectingLocation(Kernel::HLERequestContext& ctx);
+
+        /**
          * AC::SetRequestEulaVersion service function
          *  Inputs:
          *      1 : Eula Version major

@@ -191,6 +191,19 @@ void Module::Interface::GetInfraPriority(Kernel::HLERequestContext& ctx) {
     LOG_WARNING(Service_AC, "(STUBBED) called");
 }
 
+void Module::Interface::GetConnectingLocation(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    rp.Skip(2, false); // ProcessId descriptor
+
+    constexpr u32 default_location = 0;
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
+    rb.Push(ResultSuccess);
+    rb.Push(default_location);
+
+    LOG_WARNING(Service_AC, "(STUBBED) called");
+}
+
 void Module::Interface::SetRequestEulaVersion(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
 
