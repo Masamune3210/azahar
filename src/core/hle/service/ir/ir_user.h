@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <span>
@@ -173,6 +174,7 @@ private:
     std::shared_ptr<Kernel::SharedMemory> shared_memory;
     bool connected_device;
     std::unique_ptr<BufferManager> receive_buffer;
+    std::chrono::steady_clock::time_point receive_buffer_full_last_warned{};
     std::unique_ptr<ExtraHID> extra_hid;
 
 private:

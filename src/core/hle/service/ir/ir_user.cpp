@@ -270,7 +270,11 @@ void IR_USER::PutToReceive(std::span<const u8> payload) {
     if (receive_buffer->Put(packet)) {
         receive_event->Signal();
     } else {
-        LOG_ERROR(Service_IR, "receive buffer is full!");
+        const auto now = std::chrono::steady_clock::now();
+        if (now - receive_buffer_full_last_warned >= std::chrono::seconds(15)) {
+            LOG_WARNING(Service_IR, "receive buffer is full!");
+            receive_buffer_full_last_warned = now;
+        }
     }
 }
 
