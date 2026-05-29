@@ -60,7 +60,8 @@ private:
     std::unique_ptr<Socket> socket;
     std::shared_ptr<DeviceStatus> status;
     std::thread thread;
-    u64 packet_sequence = 0;
+    u32 packet_sequence = 0;
+    u32 stale_packet_drop_count = 0;
 };
 
 /// An async job allowing configuration of the touchpad calibration.

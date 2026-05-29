@@ -145,6 +145,8 @@ Client::~Client() {
 void Client::ReloadSocket(const std::string& host, u16 port, u8 pad_index, u32 client_id) {
     socket->Stop();
     thread.join();
+    packet_sequence = 0;
+    stale_packet_drop_count = 0;
     StartCommunication(host, port, pad_index, client_id);
 }
 
@@ -158,14 +160,32 @@ void Client::OnPortInfo(Response::PortInfo data) {
 
 void Client::OnPadData(Response::PadData data) {
     LOG_TRACE(Input, "PadData packet received");
-    if (data.packet_counter <= packet_sequence) {
-        LOG_WARNING(
-            Input,
-            "PadData packet dropped because its stale info. Current count: {} Packet count: {}",
-            packet_sequence, data.packet_counter);
-        return;
+    const u32 packet_counter = data.packet_counter;
+    if (packet_counter <= packet_sequence) {
+        constexpr u32 packet_counter_reset_threshold = 1000;
+        const u32 counter_delta = packet_sequence - packet_counter;
+
+        if (counter_delta > packet_counter_reset_threshold) {
+            LOG_WARNING(Input,
+                        "PadData packet counter moved backwards by {}; assuming UDP input "
+                        "server restarted or counter wrapped. Current count: {} Packet count: {}",
+                        counter_delta, packet_sequence, packet_counter);
+            packet_sequence = packet_counter;
+            stale_packet_drop_count = 0;
+        } else {
+            stale_packet_drop_count++;
+            if (stale_packet_drop_count == 1 || stale_packet_drop_count % 1000 == 0) {
+                LOG_WARNING(Input,
+                            "PadData packet dropped because its stale info. Current count: {} "
+                            "Packet count: {} Dropped stale packets: {}",
+                            packet_sequence, packet_counter, stale_packet_drop_count);
+            }
+            return;
+        }
+    } else {
+        packet_sequence = packet_counter;
+        stale_packet_drop_count = 0;
     }
-    packet_sequence = data.packet_counter;
     // Due to differences between the 3ds and cemuhookudp motion directions, we need to invert
     // accel.x and accel.z and also invert pitch and yaw. See
     // https://github.com/citra-emu/citra/pull/4049 for more details on gyro/accel
