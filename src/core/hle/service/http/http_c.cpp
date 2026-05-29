@@ -417,9 +417,14 @@ void Context::MakeRequestNonSSL(httplib::Request& request, const URLInfo& url_in
             response_headers_promise.set_value();
         } catch (const std::future_error&) {
         }
+    }
+    // client->send() is synchronous: by the time it returns (success or failure) the
+    // response body, if any, has already been fully delivered via content_receiver.
+    // Mark the request Completed under stream_mutex so ReceiveData's wait condition
+    // can observe completion atomically with the notify.
+    {
+        std::lock_guard<std::mutex> lock(stream_mutex);
         state = RequestState::Completed;
-    } else {
-        state = RequestState::ReceivingBody;
     }
     stream_cv.notify_all();
     {
@@ -488,9 +493,14 @@ void Context::MakeRequestSSL(httplib::Request& request, const URLInfo& url_info,
             response_headers_promise.set_value();
         } catch (const std::future_error&) {
         }
+    }
+    // client->send() is synchronous: by the time it returns (success or failure) the
+    // response body, if any, has already been fully delivered via content_receiver.
+    // Mark the request Completed under stream_mutex so ReceiveData's wait condition
+    // can observe completion atomically with the notify.
+    {
+        std::lock_guard<std::mutex> lock(stream_mutex);
         state = RequestState::Completed;
-    } else {
-        state = RequestState::ReceivingBody;
     }
     stream_cv.notify_all();
     {
@@ -734,14 +744,21 @@ void HTTP_C::ReceiveDataImpl(Kernel::HLERequestContext& ctx, bool timeout) {
 
             // Wait until enough data is buffered to fill the caller's buffer, or the
             // download finishes (in which case we deliver whatever remains).
+            //
+            // We can't use request_future.wait_for(0ms) as the completion signal here:
+            // std::future becoming ready does not notify any condition_variable, and
+            // MakeRequest's final stream_cv.notify_all() runs *before* the std::async
+            // lambda returns -- i.e. before the future flips to ready. A wake from that
+            // notify therefore observes future-not-ready and goes back to sleep, with
+            // no further wake ever delivered. Instead, key off state==Completed, which
+            // MakeRequest sets under stream_mutex right before its notify_all.
             const size_t target =
                 http_context.current_copied_data + async_data->buffer_size;
             {
                 std::unique_lock<std::mutex> lock(http_context.stream_mutex);
                 auto condition = [&] {
                     return http_context.response.body.size() >= target ||
-                           http_context.request_future.wait_for(
-                               std::chrono::milliseconds(0)) == std::future_status::ready;
+                           http_context.state == RequestState::Completed;
                 };
                 if (async_data->timeout) {
                     if (!http_context.stream_cv.wait_for(
@@ -766,9 +783,7 @@ void HTTP_C::ReceiveDataImpl(Kernel::HLERequestContext& ctx, bool timeout) {
             Context& http_context = GetContext(async_data->context_handle);
 
             std::lock_guard<std::mutex> lock(http_context.stream_mutex);
-            const bool download_complete =
-                http_context.request_future.wait_for(std::chrono::milliseconds(0)) ==
-                std::future_status::ready;
+            const bool download_complete = http_context.state == RequestState::Completed;
             const size_t available =
                 http_context.response.body.size() - http_context.current_copied_data;
             const size_t to_copy =
