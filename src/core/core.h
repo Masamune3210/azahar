@@ -425,6 +425,8 @@ public:
         debug_next_process = false;
     }
 
+    void DebugUnscheduleAllThreadsFromFrontend(bool unschedule);
+
 private:
     /**
      * Initialize the emulated system.
