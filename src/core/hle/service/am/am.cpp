@@ -12,6 +12,7 @@
 #include "common/alignment.h"
 #include "common/archives.h"
 #include "common/common_paths.h"
+#include "common/directory_cache.h"
 #include "common/file_util.h"
 #include "common/hacks/hack_manager.h"
 #include "common/logging/log.h"
@@ -517,6 +518,9 @@ CIAFile::InstallResult CIAFile::WriteTitleMetadata(std::span<const u8> tmd_data,
         res.result = FileSys::ResultFileNotFound;
         return res;
     }
+    // A new TMD just appeared in this title's content/ directory -- evict any cached
+    // listing of that directory so subsequent lookups see the new state.
+    Common::DirectoryCache::Instance().Invalidate(tmd_folder);
 
     res.result = PrepareToImportContent(tmd);
     return res;
@@ -854,6 +858,7 @@ bool CIAFile::Close() {
                 GetTitlePath(media_type, container.GetTitleMetadata().GetTitleID()) + "content/";
             current_content_file.reset();
             FileUtil::DeleteDirRecursively(title_content_path);
+            Common::DirectoryCache::Instance().Invalidate(title_content_path);
         }
         return true;
     }
@@ -895,6 +900,13 @@ bool CIAFile::Close() {
         }
 
         FileUtil::Delete(old_tmd_path);
+        // We just removed the old TMD (and possibly several old .app files) from this
+        // title's content/ directory. Drop the cached listing for it.
+        std::string old_content_folder;
+        Common::SplitPath(old_tmd_path, &old_content_folder, nullptr, nullptr);
+        if (!old_content_folder.empty()) {
+            Common::DirectoryCache::Instance().Invalidate(old_content_folder);
+        }
     }
     return true;
 }
@@ -1028,6 +1040,12 @@ void ContentFile::Flush() const {}
 void ContentFile::Cancel(FS::MediaType media_type, u64 title_id) {
     auto path = GetTitleContentPath(media_type, title_id, index, true);
     FileUtil::Delete(path);
+    // Deleted an in-progress .app from this title's content/ directory; drop its cached listing.
+    std::string content_folder;
+    Common::SplitPath(path, &content_folder, nullptr, nullptr);
+    if (!content_folder.empty()) {
+        Common::DirectoryCache::Instance().Invalidate(content_folder);
+    }
 }
 
 InstallStatus InstallCIA(const std::string& path,
@@ -1217,12 +1235,14 @@ std::string GetTitleMetadataPath(Service::FS::MediaType media_type, u64 tid, boo
     // The TMD ID is usually held in the title databases, which we don't implement.
     // For now, just scan for any .tmd files which exist, the smallest will be the
     // base ID and the largest will be the (currently installing) update ID.
+    // The directory listing is cached so repeated TMD lookups against the same content/
+    // directory do not re-walk the filesystem on every call.
     constexpr u32 MAX_TMD_ID = 0xFFFFFFFF;
     u32 base_id = MAX_TMD_ID;
     u32 update_id = 0;
-    FileUtil::FSTEntry entries;
-    FileUtil::ScanDirectoryTree(content_path, entries);
-    for (const FileUtil::FSTEntry& entry : entries.children) {
+    const std::vector<FileUtil::FSTEntry> entries =
+        Common::DirectoryCache::Instance().ListFlat(content_path);
+    for (const FileUtil::FSTEntry& entry : entries) {
         std::string filename_filename, filename_extension;
         Common::SplitPath(entry.virtualName, nullptr, &filename_filename, &filename_extension);
 
@@ -2223,6 +2243,7 @@ void Module::Interface::DeleteUserProgram(Kernel::HLERequestContext& ctx) {
         return;
     }
     bool success = FileUtil::DeleteDirRecursively(path);
+    Common::DirectoryCache::Instance().Invalidate(path + "content/");
     am->ScanForAllTitles();
     rb.Push(ResultSuccess);
     if (!success)
@@ -3454,6 +3475,9 @@ void Module::Interface::EndImportProgram(Kernel::HLERequestContext& ctx) {
         cia_file.Unwrap()->Close();
     }
 
+    // Defensive: clear every cached directory listing because the CIA install stream may
+    // have written to title content/ paths beyond the few we instrument per-write above.
+    Common::DirectoryCache::Instance().Clear();
     am->ScanForAllTitles();
 
     am->cia_installing = false;
@@ -3472,6 +3496,7 @@ void Module::Interface::EndImportProgramWithoutCommit(Kernel::HLERequestContext&
 
     // Note: This function is basically a no-op for us since we don't use title.db or ticket.db
     // files to keep track of installed titles.
+    Common::DirectoryCache::Instance().Clear();
     am->ScanForAllTitles();
 
     am->cia_installing = false;
@@ -3738,6 +3763,12 @@ void Module::Interface::CommitImportTitlesImpl(Kernel::HLERequestContext& ctx,
         }
     }
 
+    // Any of the titles in title_ids may have just been committed/cleaned-up. Drop their
+    // cached content/ listings so the next per-title lookup pulls a fresh view from disk.
+    for (const u64 tid : title_ids) {
+        Common::DirectoryCache::Instance().Invalidate(GetTitlePath(media_type, tid) + "content/");
+    }
+
     am->ScanForTitles(media_type);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
@@ -3756,6 +3787,7 @@ Result UninstallProgram(const FS::MediaType media_type, const u64 title_id) {
         return {ErrorDescription::NotFound, ErrorModule::AM, ErrorSummary::InvalidState,
                 ErrorLevel::Permanent};
     }
+    Common::DirectoryCache::Instance().Invalidate(path);
     return ResultSuccess;
 }
 

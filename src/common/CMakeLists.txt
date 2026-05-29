@@ -13,6 +13,8 @@ add_library(citra_common STATIC EXCLUDE_FROM_ALL
     atomic_ops.h
     detached_tasks.cpp
     detached_tasks.h
+    directory_cache.cpp
+    directory_cache.h
     bit_field.h
     bit_field.natvis
     bit_set.h
