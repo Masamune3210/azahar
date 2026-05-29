@@ -66,6 +66,8 @@ signals:
     void Finished(QStringList watch_list);
 
 private:
+    bool AddFileEntryToGameList(const std::string& physical_name, GameListDir* parent_dir,
+                                Service::FS::MediaType media_type);
     void AddFstEntriesToGameList(const std::string& dir_path, unsigned int recursion,
                                  GameListDir* parent_dir, Service::FS::MediaType media_type);
 
