@@ -864,12 +864,16 @@ const std::string& GetExeDirectory() {
 }
 
 std::string AppDataRoamingDirectory() {
-    PWSTR pw_local_path = nullptr;
-    // Only supported by Windows Vista or later
-    SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &pw_local_path);
-    std::string local_path = Common::UTF16ToUTF8(pw_local_path);
-    CoTaskMemFree(pw_local_path);
-    return local_path;
+    PWSTR path = nullptr;
+
+    const HRESULT hr =
+        SHGetKnownFolderPath(FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, nullptr, &path);
+
+    ASSERT_MSG(SUCCEEDED(hr) && path != nullptr, "Failed to get AppData directory: {:X}", hr);
+
+    std::string result = Common::UTF16ToUTF8(path);
+    CoTaskMemFree(path);
+    return result;
 }
 #else
 /**
@@ -1514,6 +1518,46 @@ std::size_t IOFile::WriteImpl(const void* data, std::size_t length, std::size_t 
 #else
     return std::fwrite(data, data_size, length, m_file);
 #endif
+}
+
+bool IOFile::ReadLine(std::string& line) {
+    line.clear();
+
+    char ch;
+    bool read_anything = false;
+
+    while (true) {
+        const std::size_t read = ReadImpl(&ch, sizeof(ch), 1);
+
+        if (read != sizeof(ch)) {
+            return read_anything;
+        }
+        read_anything = true;
+
+        if (ch == '\n') {
+            return true;
+        }
+
+        // Always convert to UNIX style
+        if (ch != '\r') {
+            line.push_back(ch);
+        }
+    }
+}
+
+size_t IOFile::WriteLine(const std::string_view line) {
+    const size_t written_line = WriteImpl(line.data(), line.size(), 1);
+    if (written_line != line.size()) {
+        return written_line;
+    }
+
+    char nl = '\n';
+    const size_t written_nl = WriteImpl(&nl, sizeof(nl), 1);
+    if (written_nl != sizeof(nl)) {
+        return written_nl;
+    }
+
+    return written_line + written_nl;
 }
 
 bool IOFile::Resize(u64 size) {

@@ -299,6 +299,9 @@ void Context::MakeRequest() {
     request.method = request_method_strings.at(method);
     request.path = url_info.path;
 
+    // Apply configured HLE URL replacements before opening the connection.
+    url_info.host = url_replacer->Apply(url_info.host);
+
     // Signal the headers future as soon as httplib has parsed response headers,
     // before the body is received. This lets GetResponseStatusCode and GetResponseHeader
     // return immediately without waiting for the full download to complete.
@@ -2425,6 +2428,82 @@ void HTTP_C::SelectRootCertChain(Kernel::HLERequestContext& ctx) {
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(ResultSuccess);
+}
+
+URLReplacer::URLReplacer() {
+    const std::string path{fmt::format("{}/http_hle_replace_rules.txt",
+                                       FileUtil::GetUserPath(FileUtil::UserPath::SysDataDir))};
+    FileUtil::IOFile f(path, "rb");
+    if (!f.IsOpen()) {
+        return;
+    }
+
+    std::string pattern;
+    std::string replacement;
+    while (f.ReadLine(pattern) && f.ReadLine(replacement)) {
+        try {
+            rules.push_back(Rule{.regex = boost::regex(pattern), .pattern = pattern,
+                                 .replacement = replacement});
+        } catch (const boost::regex_error& e) {
+            LOG_ERROR(Service_HTTP, "Failed to load HTTP HLE replacement pattern \"{}\": {}",
+                      pattern, e.what());
+        }
+    }
+}
+
+bool URLReplacer::HasRule(const std::string& pattern) {
+    for (const auto& rule : rules) {
+        if (rule.pattern == pattern) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool URLReplacer::AddRule(const std::string& pattern, const std::string& replacement) {
+    try {
+        rules.push_back(Rule{.regex = boost::regex(pattern), .pattern = pattern,
+                             .replacement = replacement});
+    } catch (const boost::regex_error&) {
+        return false;
+    }
+    return true;
+}
+
+bool URLReplacer::DeleteRule(const std::string& pattern) {
+    const auto old_size = rules.size();
+    std::erase_if(rules, [&](const Rule& rule) { return rule.pattern == pattern; });
+    return rules.size() != old_size;
+}
+
+std::string URLReplacer::Apply(const std::string& url) const {
+    std::string result = url;
+    for (const auto& rule : rules) {
+        if (boost::regex_search(result, rule.regex)) {
+            result = boost::regex_replace(result, rule.regex, rule.replacement,
+                                          boost::match_default | boost::format_all);
+            LOG_WARNING(Service_HTTP, "rule \"{}\" has replaced URL \"{}\" to \"{}\"",
+                        rule.pattern, url, result);
+            break;
+        }
+    }
+    return result;
+}
+
+bool URLReplacer::Save() {
+    const std::string path{fmt::format("{}/http_hle_replace_rules.txt",
+                                       FileUtil::GetUserPath(FileUtil::UserPath::SysDataDir))};
+    FileUtil::IOFile f(path, "wb");
+    for (const auto& rule : rules) {
+        if (f.WriteLine(rule.pattern) != rule.pattern.size() + 1 ||
+            f.WriteLine(rule.replacement) != rule.replacement.size() + 1) {
+            LOG_ERROR(Service_HTTP, "failed to write URL replacement rules");
+            f.Close();
+            FileUtil::Delete(path);
+            return false;
+        }
+    }
+    return true;
 }
 
 HTTP_C::HTTP_C() : ServiceFramework("http:C", 32) {

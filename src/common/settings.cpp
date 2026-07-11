@@ -96,6 +96,7 @@ void LogSettings() {
     log_setting("Renderer_SpirvShaderGen", values.spirv_shader_gen.GetValue());
     log_setting("Renderer_DisableSpirvOptimizer", values.disable_spirv_optimizer.GetValue());
     log_setting("Renderer_Debug", values.renderer_debug.GetValue());
+    log_setting("Renderer_PicaDebugging", values.pica_debugging.GetValue());
     log_setting("Renderer_UseHwShader", values.use_hw_shader.GetValue());
     log_setting("Renderer_ShadersAccurateMul", values.shaders_accurate_mul.GetValue());
     log_setting("Renderer_UseShaderJit", values.use_shader_jit.GetValue());
@@ -103,6 +104,7 @@ void LogSettings() {
     log_setting("Renderer_UseIntegerScaling", values.use_integer_scaling.GetValue());
     log_setting("Renderer_FrameLimit", values.frame_limit.GetValue());
     log_setting("Renderer_VSyncNew", values.use_vsync.GetValue());
+    log_setting("Renderer_SkipDuplicateFrames", values.use_skip_duplicate_frames.GetValue());
     log_setting("Renderer_PostProcessingShader", values.pp_shader_name.GetValue());
     log_setting("Renderer_FilterMode", values.filter_mode.GetValue());
     log_setting("Renderer_TextureFilter", GetTextureFilterName(values.texture_filter.GetValue()));
@@ -215,6 +217,7 @@ void RestoreGlobalState(bool is_powered_on) {
     values.use_disk_shader_cache.SetGlobal(true);
     values.shaders_accurate_mul.SetGlobal(true);
     values.use_vsync.SetGlobal(true);
+    values.use_skip_duplicate_frames.SetGlobal(true);
     values.resolution_factor.SetGlobal(true);
     values.use_integer_scaling.SetGlobal(true);
     values.frame_limit.SetGlobal(true);
