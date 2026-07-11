@@ -20,7 +20,7 @@ CFG_I::CFG_I(std::shared_ptr<Module> cfg) : Module::Interface(std::move(cfg), "c
         {0x0005, &CFG_I::GetSystemModel, "GetSystemModel"},
         {0x0006, &CFG_I::GetModelNintendo2DS, "GetModelNintendo2DS"},
         {0x0007, nullptr, "WriteToFirstByteCfgSavegame"},
-        {0x0008, nullptr, "TranslateCountryInfo"},
+        {0x0008, &CFG_I::TranslateCountryInfo, "TranslateCountryInfo"},
         {0x0009, &CFG_I::GetCountryCodeString, "GetCountryCodeString"},
         {0x000A, &CFG_I::GetCountryCodeID, "GetCountryCodeID"},
         {0x000B, nullptr, "IsFangateSupported"},
