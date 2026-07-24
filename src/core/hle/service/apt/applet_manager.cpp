@@ -38,8 +38,6 @@ static constexpr u32 play_event_application_suspend = 0b0101;
 static constexpr u32 play_event_applet_resume = 0b0110;
 static constexpr u32 play_event_applet_suspend = 0b0111;
 
-static u64 GetTitleIdForApplet(AppletId id, u32 region_value);
-
 static bool IsPtmRecordableApplicationTitle(u64 title_id) {
     return static_cast<u32>(title_id >> 32) == 0x00040000;
 }
