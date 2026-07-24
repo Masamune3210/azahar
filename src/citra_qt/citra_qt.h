@@ -227,6 +227,7 @@ private:
                             const std::string& arguments, const std::string& categories,
                             const std::string& keywords, const std::string& name,
                             const bool& skip_tryexec);
+    void SyncManagedShortcuts();
 
     void ShowCommandOutput(std::string title, std::string message);
     void ShowFFmpegErrorMessage();

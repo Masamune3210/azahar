@@ -202,6 +202,70 @@
           </property>
          </widget>
         </item>
+        <item>
+         <widget class="QWidget" name="managed_shortcuts_widget" native="true">
+          <layout class="QVBoxLayout" name="managed_shortcuts_layout">
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>0</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>0</number>
+           </property>
+           <item>
+            <widget class="QCheckBox" name="toggle_managed_shortcuts">
+             <property name="text">
+              <string>Keep a folder synchronized with the application list</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QWidget" name="managed_shortcuts_path_widget" native="true">
+             <layout class="QHBoxLayout" name="managed_shortcuts_path_layout">
+              <property name="leftMargin">
+               <number>0</number>
+              </property>
+              <property name="topMargin">
+               <number>0</number>
+              </property>
+              <property name="rightMargin">
+               <number>0</number>
+              </property>
+              <property name="bottomMargin">
+               <number>0</number>
+              </property>
+              <item>
+               <widget class="QLabel" name="managed_shortcuts_directory_label">
+                <property name="text">
+                 <string>Shortcut Folder</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLineEdit" name="managed_shortcuts_directory">
+                <property name="readOnly">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QToolButton" name="change_managed_shortcuts_directory">
+                <property name="text">
+                 <string>...</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
        </layout>
       </item>
      </layout>

@@ -8,12 +8,19 @@
 #include <optional>
 #include <thread>
 #include <unordered_map>
+#include <QFile>
 #include <QFileDialog>
 #include <QFutureWatcher>
+#include <QHash>
 #include <QIcon>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPalette>
+#include <QSaveFile>
+#include <QSet>
 #include <QSysInfo>
 #include <QtConcurrent/QtConcurrentMap>
 #include <QtConcurrent/QtConcurrentRun>
@@ -135,6 +142,133 @@ Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin);
 #endif
 
 constexpr int default_mouse_timeout = 2500;
+constexpr int managed_shortcuts_manifest_version = 1;
+
+struct ManagedShortcutEntry {
+    QString key;
+    QString source_path;
+    QString shortcut_filename;
+};
+
+struct ManagedShortcutManifest {
+    QString folder;
+    QHash<QString, ManagedShortcutEntry> entries;
+    bool cleanup_allowed = false;
+};
+
+static QString GetManagedShortcutsManifestPath() {
+    return QString::fromStdString(FileUtil::GetUserPath(FileUtil::UserPath::ConfigDir)) +
+           QStringLiteral("managed_shortcuts.json");
+}
+
+static QString GetManagedShortcutExtension() {
+#if defined(_WIN32)
+    return QStringLiteral(".lnk");
+#elif defined(__linux__) || defined(__FreeBSD__)
+    return QStringLiteral(".desktop");
+#else
+    return {};
+#endif
+}
+
+static bool IsSafeManagedShortcutFilename(const QString& filename) {
+    return !filename.isEmpty() && QFileInfo(filename).fileName() == filename &&
+           filename.endsWith(GetManagedShortcutExtension(), Qt::CaseInsensitive);
+}
+
+static ManagedShortcutManifest LoadManagedShortcutsManifest() {
+    ManagedShortcutManifest manifest;
+    QFile file(GetManagedShortcutsManifestPath());
+    if (!file.exists()) {
+        return manifest;
+    }
+    if (!file.open(QIODevice::ReadOnly)) {
+        LOG_WARNING(Frontend, "Unable to read managed shortcut manifest {}",
+                    file.fileName().toStdString());
+        return manifest;
+    }
+
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject()) {
+        LOG_WARNING(Frontend, "Managed shortcut manifest parse error: {}",
+                    error.errorString().toStdString());
+        return manifest;
+    }
+
+    const QJsonObject root = document.object();
+    if (root[QStringLiteral("version")].toInt() != managed_shortcuts_manifest_version) {
+        LOG_WARNING(Frontend, "Unsupported managed shortcut manifest version");
+        return manifest;
+    }
+
+    manifest.folder = QDir::cleanPath(root[QStringLiteral("folder")].toString());
+    const QJsonArray entries = root[QStringLiteral("entries")].toArray();
+    for (const QJsonValue& value : entries) {
+        if (!value.isObject()) {
+            return {};
+        }
+        const QJsonObject object = value.toObject();
+        ManagedShortcutEntry entry{
+            .key = object[QStringLiteral("key")].toString(),
+            .source_path = object[QStringLiteral("source_path")].toString(),
+            .shortcut_filename = object[QStringLiteral("shortcut_filename")].toString(),
+        };
+        if (entry.key.isEmpty() || !IsSafeManagedShortcutFilename(entry.shortcut_filename)) {
+            LOG_WARNING(Frontend, "Ignoring invalid managed shortcut manifest entry");
+            return {};
+        }
+        manifest.entries.insert(entry.key, std::move(entry));
+    }
+    manifest.cleanup_allowed = true;
+    return manifest;
+}
+
+static bool SaveManagedShortcutsManifest(const QString& folder,
+                                         const QHash<QString, ManagedShortcutEntry>& entries) {
+    QJsonArray entry_array;
+    for (const ManagedShortcutEntry& entry : entries) {
+        QJsonObject object;
+        object[QStringLiteral("key")] = entry.key;
+        object[QStringLiteral("source_path")] = entry.source_path;
+        object[QStringLiteral("shortcut_filename")] = entry.shortcut_filename;
+        entry_array.append(object);
+    }
+
+    QJsonObject root;
+    root[QStringLiteral("version")] = managed_shortcuts_manifest_version;
+    root[QStringLiteral("folder")] = folder;
+    root[QStringLiteral("entries")] = entry_array;
+
+    QSaveFile file(GetManagedShortcutsManifestPath());
+    if (!file.open(QIODevice::WriteOnly)) {
+        LOG_ERROR(Frontend, "Unable to write managed shortcut manifest {}",
+                  file.fileName().toStdString());
+        return false;
+    }
+    if (file.write(QJsonDocument(root).toJson(QJsonDocument::Compact)) < 0 || !file.commit()) {
+        LOG_ERROR(Frontend, "Unable to commit managed shortcut manifest {}",
+                  file.fileName().toStdString());
+        return false;
+    }
+    return true;
+}
+
+static QString MakeManagedShortcutKey(u64 program_id, const QString& source_path) {
+    return QStringLiteral("%1|%2")
+        .arg(program_id, 16, 16, QLatin1Char('0'))
+        .arg(QDir::cleanPath(source_path));
+}
+
+static std::string SanitizeShortcutName(std::string name) {
+    static constexpr std::string_view illegal_chars = "<>:\"/\\|?*.";
+    for (auto it = name.rbegin(); it != name.rend(); ++it) {
+        if (illegal_chars.find(*it) != std::string_view::npos) {
+            name.erase(it.base() - 1);
+        }
+    }
+    return name;
+}
 
 /**
  * "Callouts" are one-time instructional messages shown to the user. In the config settings, there
@@ -1080,8 +1214,10 @@ void GMainWindow::ConnectWidgetEvents() {
     connect(game_list_placeholder, &GameListPlaceholder::AddDirectory, this,
             &GMainWindow::OnGameListAddDirectory);
     connect(game_list, &GameList::ShowList, this, &GMainWindow::OnGameListShowList);
-    connect(game_list, &GameList::PopulatingCompleted, this,
-            [this] { multiplayer_state->UpdateGameList(game_list->GetModel()); });
+    connect(game_list, &GameList::PopulatingCompleted, this, [this] {
+        multiplayer_state->UpdateGameList(game_list->GetModel());
+        SyncManagedShortcuts();
+    });
 #ifdef ENABLE_DEVELOPER_OPTIONS
     connect(game_list, &GameList::StartingLaunchStressTest, this,
             &GMainWindow::StartLaunchStressTest);
@@ -2171,13 +2307,7 @@ void GMainWindow::OnGameListCreateShortcut(u64 program_id, const std::string& ga
         game_title = fmt::format("{:016x}", program_id);
     }
 
-    // Delete illegal characters from title
-    const std::string illegal_chars = "<>:\"/\\|?*.";
-    for (auto it = game_title.rbegin(); it != game_title.rend(); ++it) {
-        if (illegal_chars.find(*it) != std::string::npos) {
-            game_title.erase(it.base() - 1);
-        }
-    }
+    game_title = SanitizeShortcutName(std::move(game_title));
 
     // Get icon from game file
     std::vector<u8> icon_image_file;
@@ -2307,13 +2437,7 @@ void GMainWindow::OnGameListCreateShortcutForAllGames(GameListShortcutTarget tar
         progress.setLabelText(
             tr("Creating shortcut for %1...").arg(QString::fromStdString(game_title)));
 
-        // Remove illegal filename characters
-        const std::string illegal_chars = "<>:\"/\\|?*.";
-        for (auto it = game_title.rbegin(); it != game_title.rend(); ++it) {
-            if (illegal_chars.find(*it) != std::string::npos) {
-                game_title.erase(it.base() - 1);
-            }
-        }
+        game_title = SanitizeShortcutName(std::move(game_title));
 
         // Write icon
         std::vector<u8> icon_image_file;
@@ -2352,6 +2476,198 @@ void GMainWindow::OnGameListCreateShortcutForAllGames(GameListShortcutTarget tar
                                  .arg(success_count)
                                  .arg(fail_count));
     }
+}
+
+void GMainWindow::SyncManagedShortcuts() {
+#if defined(__APPLE__)
+    return;
+#else
+    if (!UISettings::values.managed_shortcuts_enabled.GetValue()) {
+        return;
+    }
+
+    const QString configured_folder =
+        QString::fromStdString(UISettings::values.managed_shortcuts_directory.GetValue());
+    const QFileInfo folder_info(configured_folder);
+    if (configured_folder.isEmpty() || !folder_info.isDir()) {
+        LOG_WARNING(Frontend, "Managed shortcut directory is unavailable: {}",
+                    configured_folder.toStdString());
+        return;
+    }
+    const QString canonical_folder = folder_info.canonicalFilePath();
+    const QString folder = canonical_folder.isEmpty() ? QDir(configured_folder).absolutePath()
+                                                       : canonical_folder;
+    const QString shortcut_extension = GetManagedShortcutExtension();
+    if (shortcut_extension.isEmpty()) {
+        return;
+    }
+
+    std::string citra_command;
+    bool skip_tryexec = false;
+    if (const char* env_flatpak_id = getenv("FLATPAK_ID")) {
+        citra_command = fmt::format("flatpak run {}", env_flatpak_id);
+        skip_tryexec = true;
+    } else {
+        const QStringList args = QApplication::arguments();
+        if (args.isEmpty()) {
+            LOG_ERROR(Frontend, "Cannot synchronize managed shortcuts without an executable path");
+            return;
+        }
+        citra_command = args[0].toStdString();
+        if (citra_command.starts_with('.')) {
+            citra_command = FileUtil::GetCurrentDir().value_or("") + DIR_SEP + citra_command;
+        }
+    }
+
+    struct DesiredShortcut {
+        u64 program_id;
+        QString source_path;
+        QString key;
+    };
+
+    QVector<DesiredShortcut> desired_shortcuts;
+    const auto games = game_list->GetAllGames();
+    desired_shortcuts.reserve(games.size());
+    for (const auto& [program_id, source_path] : games) {
+        desired_shortcuts.append(
+            {program_id, source_path, MakeManagedShortcutKey(program_id, source_path)});
+    }
+
+    const ManagedShortcutManifest previous_manifest = LoadManagedShortcutsManifest();
+#if defined(_WIN32)
+    const bool same_folder = QDir::cleanPath(previous_manifest.folder)
+                                 .compare(QDir::cleanPath(folder), Qt::CaseInsensitive) == 0;
+#else
+    const bool same_folder = QDir::cleanPath(previous_manifest.folder) == QDir::cleanPath(folder);
+#endif
+    QHash<QString, ManagedShortcutEntry> current_entries;
+    QSet<QString> used_filenames;
+    QSet<QString> previous_owned_filenames;
+
+    if (same_folder) {
+        for (const ManagedShortcutEntry& entry : previous_manifest.entries) {
+            const QString shortcut_path = QDir(folder).filePath(entry.shortcut_filename);
+            if (QFileInfo(shortcut_path).isFile()) {
+                previous_owned_filenames.insert(entry.shortcut_filename.toCaseFolded());
+            }
+        }
+    }
+
+    // Retain existing managed shortcuts without reloading title metadata or rewriting icons.
+    if (same_folder) {
+        for (const DesiredShortcut& desired : desired_shortcuts) {
+            const auto previous = previous_manifest.entries.constFind(desired.key);
+            if (previous == previous_manifest.entries.cend()) {
+                continue;
+            }
+            const QString shortcut_path = QDir(folder).filePath(previous->shortcut_filename);
+            if (QFileInfo(shortcut_path).isFile()) {
+                current_entries.insert(desired.key, *previous);
+                used_filenames.insert(previous->shortcut_filename.toCaseFolded());
+            }
+        }
+    }
+
+    for (const DesiredShortcut& desired : desired_shortcuts) {
+        if (current_entries.contains(desired.key)) {
+            continue;
+        }
+
+        const std::string game_path = desired.source_path.toStdString();
+        const auto loader = Loader::GetLoader(game_path);
+        if (!loader) {
+            LOG_WARNING(Frontend, "Skipping managed shortcut for unavailable game: {:s}",
+                        game_path);
+            continue;
+        }
+
+        std::string game_title = fmt::format("{:016X}", desired.program_id);
+        if (loader->ReadTitle(game_title) != Loader::ResultStatus::Success) {
+            game_title = fmt::format("{:016x}", desired.program_id);
+        }
+        game_title = SanitizeShortcutName(std::move(game_title));
+        if (game_title.empty()) {
+            game_title = fmt::format("{:016X}", desired.program_id);
+        }
+
+        const QString base_name = QString::fromStdString(game_title);
+        const QString id_suffix = QStringLiteral(" [%1]").arg(desired.program_id, 16, 16,
+                                                               QLatin1Char('0'));
+        QString shortcut_name;
+        QString shortcut_filename;
+        for (int candidate_index = 0;; ++candidate_index) {
+            shortcut_name = base_name;
+            if (candidate_index > 0) {
+                shortcut_name += id_suffix;
+            }
+            if (candidate_index > 1) {
+                shortcut_name += QStringLiteral(" (%1)").arg(candidate_index);
+            }
+            shortcut_filename = shortcut_name + shortcut_extension;
+            const QString folded_filename = shortcut_filename.toCaseFolded();
+            const bool filename_is_used = used_filenames.contains(folded_filename);
+            const bool would_replace_unowned_file =
+                QFileInfo::exists(QDir(folder).filePath(shortcut_filename)) &&
+                !previous_owned_filenames.contains(folded_filename);
+            if (!filename_is_used && !would_replace_unowned_file) {
+                break;
+            }
+        }
+
+        std::filesystem::path icon_path;
+        std::vector<u8> icon_image_file;
+        if (loader->ReadIcon(icon_image_file) == Loader::ResultStatus::Success) {
+            const QPixmap pixmap = GetQPixmapFromSMDH(icon_image_file);
+            if (!pixmap.isNull() &&
+                MakeShortcutIcoPath(desired.program_id, shortcut_name.toStdString(), icon_path) &&
+                !SaveIconToFile(icon_path, pixmap.toImage())) {
+                LOG_WARNING(Frontend, "Could not write managed shortcut icon for {:s}", game_path);
+                icon_path.clear();
+            }
+        }
+
+        const std::string arguments = fmt::format("\"{:s}\"", game_path);
+        const std::string comment =
+            fmt::format("Start {:s} with the Azahar Emulator", game_title);
+        if (!CreateShortcutLink(std::filesystem::path{folder.toStdString()}, comment, icon_path,
+                                citra_command, arguments, "Game;Emulator;Qt;", "3ds;Nintendo;",
+                                shortcut_name.toStdString(), skip_tryexec)) {
+            LOG_WARNING(Frontend, "Could not create managed shortcut for {:s}", game_path);
+            continue;
+        }
+
+        ManagedShortcutEntry entry{
+            .key = desired.key,
+            .source_path = desired.source_path,
+            .shortcut_filename = shortcut_filename,
+        };
+        current_entries.insert(desired.key, std::move(entry));
+        used_filenames.insert(shortcut_filename.toCaseFolded());
+    }
+
+    if (previous_manifest.cleanup_allowed && !previous_manifest.folder.isEmpty()) {
+        const QDir previous_folder(previous_manifest.folder);
+        for (const ManagedShortcutEntry& previous : previous_manifest.entries) {
+            if (same_folder &&
+                used_filenames.contains(previous.shortcut_filename.toCaseFolded())) {
+                continue;
+            }
+            if (!IsSafeManagedShortcutFilename(previous.shortcut_filename)) {
+                continue;
+            }
+            const QString shortcut_path = previous_folder.filePath(previous.shortcut_filename);
+            if (QFileInfo::exists(shortcut_path) && !QFile::remove(shortcut_path)) {
+                LOG_WARNING(Frontend, "Unable to remove obsolete managed shortcut {}",
+                            shortcut_path.toStdString());
+            }
+        }
+    }
+
+    if (SaveManagedShortcutsManifest(folder, current_entries)) {
+        LOG_INFO(Frontend, "Synchronized {} managed shortcut(s) in {}", current_entries.size(),
+                 folder.toStdString());
+    }
+#endif
 }
 
 void GMainWindow::OnGameListDumpRomFS(QString game_path, u64 program_id) {
@@ -3167,6 +3483,7 @@ void GMainWindow::OnConfigure() {
             multiplayer_state->UpdateCredentials();
         emit UpdateThemedIcons();
         SyncMenuUISettings();
+        SyncManagedShortcuts();
         game_list->RefreshGameDirectory();
         config->Save();
         if (UISettings::values.hide_mouse && emulation_running) {

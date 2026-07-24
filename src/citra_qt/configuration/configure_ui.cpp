@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <QDirIterator>
+#include <QFileDialog>
 #include "citra_qt/configuration/configure_ui.h"
 #include "citra_qt/uisettings.h"
 #include "ui_configure_ui.h"
@@ -16,6 +17,21 @@ ConfigureUi::ConfigureUi(QWidget* parent)
         ui->theme_combobox->addItem(QString::fromUtf8(theme.first),
                                     QString::fromUtf8(theme.second));
     }
+
+    connect(ui->change_managed_shortcuts_directory, &QToolButton::clicked, this, [this] {
+        const QString dir_path = QFileDialog::getExistingDirectory(
+            this, tr("Select Managed Shortcut Directory"),
+            ui->managed_shortcuts_directory->text(), QFileDialog::ShowDirsOnly);
+        if (!dir_path.isEmpty()) {
+            ui->managed_shortcuts_directory->setText(dir_path);
+        }
+    });
+    connect(ui->toggle_managed_shortcuts, &QCheckBox::toggled,
+            ui->managed_shortcuts_path_widget, &QWidget::setEnabled);
+
+#ifdef __APPLE__
+    ui->managed_shortcuts_widget->setVisible(false);
+#endif
 
     SetConfiguration();
 }
@@ -66,6 +82,12 @@ void ConfigureUi::SetConfiguration() {
     ui->toggle_hide_no_icon->setChecked(UISettings::values.game_list_hide_no_icon.GetValue());
     ui->toggle_single_line_mode->setChecked(
         UISettings::values.game_list_single_line_mode.GetValue());
+    ui->toggle_managed_shortcuts->setChecked(
+        UISettings::values.managed_shortcuts_enabled.GetValue());
+    ui->managed_shortcuts_directory->setText(
+        QString::fromStdString(UISettings::values.managed_shortcuts_directory.GetValue()));
+    ui->managed_shortcuts_path_widget->setEnabled(
+        UISettings::values.managed_shortcuts_enabled.GetValue());
     ui->show_advanced_frametime_info->setChecked(
         UISettings::values.show_advanced_frametime_info.GetValue());
 }
@@ -81,6 +103,9 @@ void ConfigureUi::ApplyConfiguration() {
         static_cast<UISettings::GameListText>(ui->row_2_text_combobox->currentIndex() - 1);
     UISettings::values.game_list_hide_no_icon = ui->toggle_hide_no_icon->isChecked();
     UISettings::values.game_list_single_line_mode = ui->toggle_single_line_mode->isChecked();
+    UISettings::values.managed_shortcuts_enabled = ui->toggle_managed_shortcuts->isChecked();
+    UISettings::values.managed_shortcuts_directory =
+        ui->managed_shortcuts_directory->text().toStdString();
     UISettings::values.show_advanced_frametime_info = ui->show_advanced_frametime_info->isChecked();
 }
 

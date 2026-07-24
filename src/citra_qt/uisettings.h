@@ -113,6 +113,10 @@ struct Values {
     Settings::Setting<GameListText> game_list_row_2{GameListText::FileName, Settings::Keys::row2};
     Settings::Setting<bool> game_list_hide_no_icon{false, Settings::Keys::hideNoIcon};
     Settings::Setting<bool> game_list_single_line_mode{false, Settings::Keys::singleLineMode};
+    Settings::Setting<bool> managed_shortcuts_enabled{false,
+                                                       Settings::Keys::managedShortcutsEnabled};
+    Settings::Setting<std::string> managed_shortcuts_directory{
+        "", Settings::Keys::managedShortcutsDirectory};
 
     // Compatibility List
     Settings::Setting<bool> show_compat_column{true, Settings::Keys::show_compat_column};

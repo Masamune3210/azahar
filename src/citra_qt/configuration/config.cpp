@@ -881,6 +881,8 @@ void QtConfig::ReadUIGameListValues() {
     ReadBasicSetting(UISettings::values.game_list_row_2);
     ReadBasicSetting(UISettings::values.game_list_hide_no_icon);
     ReadBasicSetting(UISettings::values.game_list_single_line_mode);
+    ReadBasicSetting(UISettings::values.managed_shortcuts_enabled);
+    ReadBasicSetting(UISettings::values.managed_shortcuts_directory);
 
     ReadBasicSetting(UISettings::values.show_compat_column);
     ReadBasicSetting(UISettings::values.show_region_column);
@@ -1463,6 +1465,8 @@ void QtConfig::SaveUIGameListValues() {
     WriteBasicSetting(UISettings::values.game_list_row_2);
     WriteBasicSetting(UISettings::values.game_list_hide_no_icon);
     WriteBasicSetting(UISettings::values.game_list_single_line_mode);
+    WriteBasicSetting(UISettings::values.managed_shortcuts_enabled);
+    WriteBasicSetting(UISettings::values.managed_shortcuts_directory);
 
     WriteBasicSetting(UISettings::values.show_compat_column);
     WriteBasicSetting(UISettings::values.show_region_column);
