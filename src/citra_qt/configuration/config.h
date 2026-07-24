@@ -138,4 +138,5 @@ private:
     std::unique_ptr<QSettings> qt_config;
     std::string qt_config_loc;
     bool global;
+    bool config_write_enabled{false};
 };

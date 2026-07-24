@@ -11,6 +11,7 @@
 #include "citra_qt/configuration/config.h"
 #include "citra_qt/setting_qkeys.h"
 #include "common/file_util.h"
+#include "common/logging/log.h"
 #include "common/settings.h"
 #include "core/hle/service/service.h"
 #include "input_common/main.h"
@@ -119,6 +120,7 @@ void QtConfig::Initialize(const std::string& config_name) {
     FileUtil::CreateFullPath(qt_config_loc);
     qt_config =
         std::make_unique<QSettings>(QString::fromStdString(qt_config_loc), QSettings::IniFormat);
+    qt_config->setAtomicSyncRequired(true);
     Reload();
 }
 
@@ -925,6 +927,26 @@ void QtConfig::ReadWebServiceValues() {
 }
 
 void QtConfig::SaveValues() {
+    std::vector<std::pair<QString, QVariant>> previous_settings;
+    const QStringList previous_keys = qt_config->allKeys();
+    previous_settings.reserve(previous_keys.size());
+    for (const QString& key : previous_keys) {
+        previous_settings.emplace_back(key, qt_config->value(key));
+    }
+    const auto restore_previous_settings = [this, &previous_settings] {
+        qt_config->clear();
+        for (const auto& [key, value] : previous_settings) {
+            qt_config->setValue(key, value);
+        }
+    };
+
+    const auto count_non_default_settings = [this](const QStringList& keys) {
+        return std::count_if(keys.cbegin(), keys.cend(), [this](const QString& key) {
+            return key.endsWith(QStringLiteral("/default")) && !qt_config->value(key).toBool();
+        });
+    };
+    const auto previous_non_default_count = count_non_default_settings(previous_keys);
+
     if (global) {
         SaveControlValues();
         SaveCameraValues();
@@ -942,7 +964,34 @@ void QtConfig::SaveValues() {
     SaveAudioValues();
     SaveSystemValues();
     SaveUtilityValues();
+
+    // A crash or otherwise unstable state can leave the in-memory settings at their defaults.
+    // Refuse a large collapse of an established customized config, while still allowing first-run
+    // initialization and ordinary edits (including resetting a small number of options).
+    constexpr int minimum_lost_settings_for_bulk_reset = 3;
+    const auto proposed_non_default_count = count_non_default_settings(qt_config->allKeys());
+    const auto lost_non_default_count = previous_non_default_count - proposed_non_default_count;
+    const bool is_bulk_reset = lost_non_default_count >= minimum_lost_settings_for_bulk_reset &&
+                               proposed_non_default_count * 4 <= previous_non_default_count;
+    if (global && is_bulk_reset) {
+        restore_previous_settings();
+        LOG_ERROR(Frontend,
+                  "Refusing to save config file {} because it would discard {} of {} customized "
+                  "settings",
+                  qt_config_loc, lost_non_default_count, previous_non_default_count);
+        return;
+    }
+
     qt_config->sync();
+    if (qt_config->status() != QSettings::NoError) {
+        restore_previous_settings();
+        config_write_enabled = false;
+        LOG_ERROR(Frontend,
+                  "Failed to atomically save config file {} (QSettings status {}). The previous "
+                  "settings were restored in memory and further config writes are disabled for "
+                  "this session.",
+                  qt_config_loc, static_cast<int>(qt_config->status()));
+    }
 }
 
 void QtConfig::SaveAudioValues() {
@@ -1483,11 +1532,27 @@ void QtConfig::WriteSetting(const QString& name, const QVariant& value,
 }
 
 void QtConfig::Reload() {
+    qt_config->sync();
     ReadValues();
-    // To apply default value changes
+    config_write_enabled = qt_config->status() == QSettings::NoError;
+    if (qt_config->status() != QSettings::NoError) {
+        LOG_ERROR(Frontend,
+                  "Failed to load config file {} (QSettings status {}). Config writes are "
+                  "disabled for this session to preserve the existing file.",
+                  qt_config_loc, static_cast<int>(qt_config->status()));
+        return;
+    }
+
+    // Apply newly introduced defaults while preserving the bulk-reset safety check in SaveValues.
     SaveValues();
 }
 
 void QtConfig::Save() {
+    if (!config_write_enabled) {
+        LOG_WARNING(Frontend, "Skipping save of config file {} after an earlier load/write error",
+                    qt_config_loc);
+        return;
+    }
+
     SaveValues();
 }
