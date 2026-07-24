@@ -2160,6 +2160,13 @@ void GMainWindow::OnGameListCreateShortcut(u64 program_id, const std::string& ga
     // Get title from game file
     const auto loader = Loader::GetLoader(game_path);
     std::string game_title = fmt::format("{:016X}", program_id);
+    if (!loader) {
+        LOG_WARNING(Frontend, "Cannot create shortcut because the game is unavailable: {:s}",
+                    game_path);
+        CreateShortcutMessagesGUI(this, CREATE_SHORTCUT_MSGBOX_ERROR,
+                                  QString::fromStdString(game_title));
+        return;
+    }
     if (loader->ReadTitle(game_title) != Loader::ResultStatus::Success) {
         game_title = fmt::format("{:016x}", program_id);
     }
@@ -2289,6 +2296,11 @@ void GMainWindow::OnGameListCreateShortcutForAllGames(GameListShortcutTarget tar
         // Read title
         const auto loader = Loader::GetLoader(game_path);
         std::string game_title = fmt::format("{:016X}", program_id);
+        if (!loader) {
+            LOG_WARNING(Frontend, "Skipping shortcut for unavailable game: {:s}", game_path);
+            ++fail_count;
+            continue;
+        }
         if (loader->ReadTitle(game_title) != Loader::ResultStatus::Success) {
             game_title = fmt::format("{:016x}", program_id);
         }
