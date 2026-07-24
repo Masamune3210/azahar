@@ -101,7 +101,6 @@ enum class AppletId : u32 {
     Mint2 = 0x407,
     Extrapad2 = 0x408,
     Memolib2 = 0x409,
-    TypeMask = 0xF00,
 };
 
 u64 GetTitleIdForApplet(AppletId id, u32 region_value);

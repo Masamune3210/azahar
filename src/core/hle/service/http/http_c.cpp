@@ -13,6 +13,7 @@
 #include <fmt/format.h>
 #include "common/archives.h"
 #include "common/assert.h"
+#include "common/file_util.h"
 #include "common/scope_exit.h"
 #include "common/string_util.h"
 #include "core/core.h"
@@ -873,6 +874,7 @@ void HTTP_C::CreateContext(Kernel::HLERequestContext& ctx) {
     contexts[context_counter].socket_buffer_size = 0;
     contexts[context_counter].handle = context_counter;
     contexts[context_counter].session_id = session_data->session_id;
+    contexts[context_counter].url_replacer = &url_replacer;
 
     session_data->num_http_contexts++;
 
@@ -947,13 +949,20 @@ void HTTP_C::GetRequestState(Kernel::HLERequestContext& ctx) {
         return;
     }
 
-    LOG_DEBUG(Service_HTTP, "called, context_handle={}", context_handle);
-
     Context& http_context = GetContext(context_handle);
+    RequestState state = http_context.state;
+
+    // HTTPC reports SendingRequest after BeginRequest while it waits for POST data to be
+    // finalized, even though the host request cannot start until NotifyFinishSendPostData.
+    if (state == RequestState::NotStarted && http_context.post_pending_request) {
+        state = RequestState::SendingRequest;
+    }
+
+    LOG_DEBUG(Service_HTTP, "called, context_handle={} state={}", context_handle, state);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(ResultSuccess);
-    rb.PushEnum<RequestState>(http_context.state);
+    rb.PushEnum<RequestState>(state);
 }
 
 void HTTP_C::AddRequestHeader(Kernel::HLERequestContext& ctx) {
@@ -2104,6 +2113,60 @@ void HTTP_C::Finalize(Kernel::HLERequestContext& ctx) {
     LOG_WARNING(Service_HTTP, "(STUBBED) called");
 }
 
+void HTTP_C::RegisterURLReplacement(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const u32 pattern_size = rp.Pop<u32>();
+    const u32 replacement_size = rp.Pop<u32>();
+
+    const std::vector<u8>& pattern_buf = rp.PopStaticBuffer();
+    const std::vector<u8>& replacement_buf = rp.PopStaticBuffer();
+
+    std::string pattern(reinterpret_cast<const char*>(pattern_buf.data()),
+                        std::min(static_cast<size_t>(pattern_size), pattern_buf.size()));
+    std::string replacement(
+        reinterpret_cast<const char*>(replacement_buf.data()),
+        std::min(static_cast<size_t>(replacement_size), replacement_buf.size()));
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    if (url_replacer.HasRule(pattern)) {
+        rb.Push(Result{ErrorDescription::AlreadyExists, ErrorModule::HTTP,
+                       ErrorSummary::InvalidArgument, ErrorLevel::Status});
+        return;
+    }
+
+    Result res = url_replacer.AddRule(pattern, replacement)
+                     ? ResultSuccess
+                     : Result{ErrorDescription::InvalidCombination, ErrorModule::HTTP,
+                              ErrorSummary::InvalidArgument, ErrorLevel::Status};
+    if (res.IsSuccess()) {
+        res = url_replacer.Save() ? res
+                                  : Result{ErrorDescription::OutOfMemory, ErrorModule::HTTP,
+                                           ErrorSummary::Internal, ErrorLevel::Permanent};
+    }
+
+    rb.Push(res);
+}
+
+void HTTP_C::UnregisterURLReplacement(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const u32 pattern_size = rp.Pop<u32>();
+    const std::vector<u8>& pattern_buf = rp.PopStaticBuffer();
+
+    std::string pattern(reinterpret_cast<const char*>(pattern_buf.data()),
+                        std::min(static_cast<size_t>(pattern_size), pattern_buf.size()));
+
+    const bool deleted = url_replacer.DeleteRule(pattern);
+    Result res = deleted ? ResultSuccess
+                         : Result{ErrorDescription::NotFound, ErrorModule::HTTP,
+                                  ErrorSummary::NotFound, ErrorLevel::Info};
+    if (deleted) {
+        url_replacer.Save();
+    }
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    rb.Push(res);
+}
+
 void HTTP_C::GetDownloadSizeState(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
     const Context::Handle context_handle = rp.Pop<u32>();
@@ -2566,6 +2629,9 @@ HTTP_C::HTTP_C() : ServiceFramework("http:C", 32) {
         {0x0037, &HTTP_C::SetKeepAlive, "SetKeepAlive"},
         {0x0038, &HTTP_C::SetPostDataTypeSize, "SetPostDataTypeSize"},
         {0x0039, &HTTP_C::Finalize, "Finalize"},
+        // Custom
+        {0x0C00, &HTTP_C::RegisterURLReplacement, "RegisterURLReplacement"},
+        {0x0C01, &HTTP_C::UnregisterURLReplacement, "UnregisterURLReplacement"},
         // clang-format on
     };
     RegisterHandlers(functions);

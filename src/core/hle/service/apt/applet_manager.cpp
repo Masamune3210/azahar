@@ -196,16 +196,6 @@ static u64 ConvertTitleID(Core::System& system, u64 base_title_id) {
     return base_title_id;
 }
 
-static bool IsSystemAppletId(AppletId applet_id) {
-    return (static_cast<u32>(applet_id) & static_cast<u32>(AppletId::TypeMask)) ==
-           static_cast<u32>(AppletId::AnySystemApplet);
-}
-
-static bool IsApplicationAppletId(AppletId applet_id) {
-    return (static_cast<u32>(applet_id) & static_cast<u32>(AppletId::TypeMask)) ==
-           static_cast<u32>(AppletId::Application);
-}
-
 AppletManager::AppletSlot AppletManager::GetAppletSlotFromId(AppletId id) {
     if (id == AppletId::Application) {
         if (GetAppletSlot(AppletSlot::Application)->applet_id != AppletId::None)
