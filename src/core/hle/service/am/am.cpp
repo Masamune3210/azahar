@@ -13,6 +13,7 @@
 #include "common/archives.h"
 #include "common/common_paths.h"
 #include "common/directory_cache.h"
+#include "common/file_derived.h"
 #include "common/file_util.h"
 #include "common/hacks/hack_manager.h"
 #include "common/logging/log.h"
@@ -128,7 +129,7 @@ void NCCHCryptoFile::Write(const u8* buffer, std::size_t length) {
     }
 
     if (!header_parsed && header_size == sizeof(NCCH_Header)) {
-        if (Loader::MakeMagic('N', 'C', 'C', 'H') != ncch_header.magic) {
+        if (FileUtil::MakeMagic('N', 'C', 'C', 'H') != ncch_header.magic) {
             // Most likely DS contents, store without additional operations
             is_not_ncch = true;
             file->WriteBytes(&ncch_header, sizeof(ncch_header));
@@ -1057,7 +1058,7 @@ InstallStatus InstallCIA(const std::string& path,
         return InstallStatus::ErrorFileNotFound;
     }
 
-    std::unique_ptr<FileUtil::IOFile> in_file = std::make_unique<FileUtil::IOFile>(path, "rb");
+    std::unique_ptr<FileUtil::IOFileBase> in_file = std::make_unique<FileUtil::IOFile>(path, "rb");
     bool is_compressed =
         FileUtil::Z3DSReadIOFile::GetUnderlyingFileMagic(in_file.get()) != std::nullopt;
     if (is_compressed) {
@@ -1128,7 +1129,7 @@ InstallStatus CheckCIAToInstall(const std::string& path, bool& is_compressed,
         return InstallStatus::ErrorFileNotFound;
     }
 
-    std::unique_ptr<FileUtil::IOFile> in_file = std::make_unique<FileUtil::IOFile>(path, "rb");
+    std::unique_ptr<FileUtil::IOFileBase> in_file = std::make_unique<FileUtil::IOFile>(path, "rb");
     is_compressed = FileUtil::Z3DSReadIOFile::GetUnderlyingFileMagic(in_file.get()) != std::nullopt;
     if (is_compressed) {
         in_file = std::make_unique<FileUtil::Z3DSReadIOFile>(std::move(in_file));
@@ -1151,7 +1152,7 @@ InstallStatus CheckCIAToInstall(const std::string& path, bool& is_compressed,
                 if (read != sizeof(ncch)) {
                     return InstallStatus::ErrorInvalid;
                 }
-                if (ncch.magic != Loader::MakeMagic('N', 'C', 'C', 'H')) {
+                if (ncch.magic != FileUtil::MakeMagic('N', 'C', 'C', 'H')) {
                     return InstallStatus::ErrorInvalid;
                 }
                 if (!ncch.no_crypto) {
