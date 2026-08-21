@@ -1,4 +1,4 @@
-// Copyright Citra Emulator Project / Azahar Emulator Project
+// Copyright 2014-2026 Citra Emulator Project / Azahar Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
@@ -337,10 +337,10 @@ void Config::Reload() {
     for (auto key = Settings::Keys::keys_array.begin(); key != Settings::Keys::keys_array.end();
          ++key) {
         const auto key_declaration_string = std::string(*key) + " =";
-        if ((std::ranges::find(DefaultINI::android_config_omitted_keys, *key) ==
+        if ((std::ranges::find(DefaultINI::android_config_omitted_keys, std::string_view(*key)) ==
              std::end(DefaultINI::android_config_omitted_keys)) &&
-            (std::string(DefaultINI::android_config_default_file_content)
-                 .find(key_declaration_string) == std::string::npos)) {
+            (std::string_view(DefaultINI::android_config_default_file_content)
+                 .find(key_declaration_string) == std::string_view::npos)) {
             ASSERT_MSG(false,
                        "Validation of default config content (jni/default_ini.h) failed: Missing "
                        "declaration for key '{}'",

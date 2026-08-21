@@ -1,4 +1,4 @@
-// Copyright Citra Emulator Project / Azahar Emulator Project
+// Copyright 2014-2026 Citra Emulator Project / Azahar Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
@@ -104,11 +104,12 @@ public:
         ErrorSystemFiles,                     ///< Error in finding system files
         ErrorSavestate,                       ///< Error saving or loading
         ErrorArticDisconnected,               ///< Error when artic base disconnects
-        ErrorN3DSApplication,       ///< Error launching New 3DS application in Old 3DS mode
-        ErrorCoreExceptionRaised,   ///< The CPU emulation raised an exception
-        ErrorMemoryExceptionRaised, ///< Unmmaped memory was accessed
-        ShutdownRequested,          ///< Emulated program requested a system shutdown
-        ErrorUnknown                ///< Any other error
+        ErrorN3DSApplication,        ///< Error launching New 3DS application in Old 3DS mode
+        ErrorCoreExceptionRaised,    ///< The CPU emulation raised an exception
+        ErrorMemoryExceptionRaised,  ///< Unmmaped memory was accessed
+        ErrorSavestateBuildMismatch, ///< Tried to load savestate from a different Azahar version
+        ShutdownRequested,           ///< Emulated program requested a system shutdown
+        ErrorUnknown                 ///< Any other error
     };
 
     explicit System();
@@ -349,9 +350,14 @@ public:
     }
 
     /// Function for checking OS microphone permissions.
-
     void RegisterMicPermissionCheck(const std::function<bool()>& permission_func) {
         mic_permission_func = permission_func;
+    }
+
+    /// Fires the callback when System::Init() is called. Called with
+    /// true when initialization starts, and with false once its done.
+    void RegisterOnInitCallback(const std::function<void(bool)>& init_callback) {
+        on_init_callback = init_callback;
     }
 
     [[nodiscard]] bool HasMicPermission() {
@@ -463,7 +469,7 @@ private:
     std::unique_ptr<AudioCore::DspInterface> dsp_core;
 
     /// When true, signals that a reschedule should happen
-    bool reschedule_pending{};
+    bool curr_core_reschedule_pending{};
 
     std::unique_ptr<VideoCore::GPU> gpu;
 
@@ -528,6 +534,8 @@ private:
 
     std::function<bool()> mic_permission_func;
     bool mic_permission_granted = false;
+
+    std::function<void(bool)> on_init_callback;
 
     boost::optional<Service::APT::DeliverArg> restore_deliver_arg;
     boost::optional<Service::APT::SysMenuArg> restore_sys_menu_arg;
